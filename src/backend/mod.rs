@@ -25,10 +25,10 @@ impl BackendController {
 }
 
 pub fn spawn(event_tx: Sender<BackendEvent>) -> Option<BackendController> {
-    if std::env::var_os("NIRI_SOCKET").is_some() {
-        if let Some(controller) = niri::spawn(event_tx.clone()) {
-            return Some(controller);
-        }
+    if std::env::var_os("NIRI_SOCKET").is_some()
+        && let Some(controller) = niri::spawn(event_tx.clone())
+    {
+        return Some(controller);
     }
 
     wayland::spawn(event_tx)

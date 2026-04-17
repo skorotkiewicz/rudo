@@ -181,8 +181,7 @@ fn normalize_key(value: &str) -> String {
     value
         .trim()
         .trim_end_matches(".desktop")
-        .replace('_', "-")
-        .replace(' ', "-")
+        .replace(['_', ' '], "-")
         .to_lowercase()
 }
 

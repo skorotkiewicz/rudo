@@ -275,10 +275,10 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
             zwlr_foreign_toplevel_handle_v1::Event::Done => state.publish_snapshot(),
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 let removed = state.windows.remove(handle);
-                if let Some(window) = removed {
-                    if let Ok(mut control) = state.control.lock() {
-                        control.handles.remove(&window.dock_id);
-                    }
+                if let Some(window) = removed
+                    && let Ok(mut control) = state.control.lock()
+                {
+                    control.handles.remove(&window.dock_id);
                 }
                 state.publish_snapshot();
             }

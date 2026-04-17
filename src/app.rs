@@ -74,7 +74,7 @@ fn build_ui(app: &gtk::Application) {
         window.set_layer(Layer::Top);
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_anchor(Edge::Bottom, true);
-        window.set_margin(Edge::Bottom, 14);
+        window.set_margin(Edge::Bottom, 6);
         window.auto_exclusive_zone_enable();
     } else {
         window.set_decorated(false);
@@ -83,7 +83,7 @@ fn build_ui(app: &gtk::Application) {
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     outer.set_halign(gtk::Align::Center);
     outer.set_valign(gtk::Align::End);
-    outer.set_margin_bottom(2);
+    outer.set_margin_bottom(0);
 
     let dock_surface = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     dock_surface.add_css_class("dock-surface");
@@ -290,10 +290,9 @@ fn build_item_widget(
                 .iter()
                 .find(|window| window.active)
                 .or_else(|| windows.first())
+                && let Some(backend) = state.borrow().backend.as_ref()
             {
-                if let Some(backend) = state.borrow().backend.as_ref() {
-                    backend.close(&window.id);
-                }
+                backend.close(&window.id);
             }
         });
         button.add_controller(middle);
@@ -521,7 +520,7 @@ fn icon_widget(app: Option<&AppRecord>) -> gtk::Image {
     } else {
         gtk::Image::from_icon_name("grid-view-symbolic")
     };
-    image.set_pixel_size(30);
+    image.set_pixel_size(24);
     image
 }
 
@@ -532,15 +531,25 @@ fn clear_children(widget: &gtk::Box) {
 }
 
 fn install_css() {
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(CSS);
-
     if let Some(display) = gdk::Display::default() {
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data(CSS);
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+
+        config::ensure_style_css();
+        if let Some(user_css) = config::load_style_css() {
+            let user_provider = gtk::CssProvider::new();
+            user_provider.load_from_data(&user_css);
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &user_provider,
+                gtk::STYLE_PROVIDER_PRIORITY_USER,
+            );
+        }
     }
 }
 
@@ -550,8 +559,8 @@ const CSS: &str = r#"
 }
 
 .dock-surface {
-    padding: 12px 14px;
-    border-radius: 28px;
+    padding: 8px 10px;
+    border-radius: 22px;
     border: 1px solid rgba(255, 255, 255, 0.14);
     background:
         linear-gradient(180deg, rgba(31, 39, 55, 0.94), rgba(18, 24, 36, 0.92));
@@ -562,10 +571,10 @@ const CSS: &str = r#"
 
 .dock-item,
 .picker-button {
-    min-width: 58px;
-    min-height: 58px;
+    min-width: 46px;
+    min-height: 46px;
     padding: 0;
-    border-radius: 20px;
+    border-radius: 16px;
     border: 1px solid transparent;
     background: rgba(255, 255, 255, 0.04);
     box-shadow: none;
