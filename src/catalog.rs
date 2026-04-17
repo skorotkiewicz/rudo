@@ -3,6 +3,7 @@ use std::path::Path;
 
 use gtk4::gio;
 use gtk4::gio::prelude::*;
+use gtk4::glib;
 
 #[derive(Clone)]
 pub struct AppRecord {
@@ -15,10 +16,8 @@ pub struct AppRecord {
 }
 
 impl AppRecord {
-    pub fn launch(&self) {
-        if let Err(error) = self.app_info.launch(&[], None::<&gio::AppLaunchContext>) {
-            eprintln!("failed to launch {}: {error}", self.id);
-        }
+    pub fn launch(&self) -> Result<(), glib::Error> {
+        self.app_info.launch(&[], None::<&gio::AppLaunchContext>)
     }
 }
 

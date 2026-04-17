@@ -1,8 +1,8 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::gdk;
 use gtk::glib::{self, ControlFlow};
@@ -32,6 +32,7 @@ struct DockItem {
     windows: Vec<WindowState>,
     pinned: bool,
     active: bool,
+    launching: bool,
 }
 
 struct DockState {
@@ -39,6 +40,34 @@ struct DockState {
     pins: Vec<String>,
     windows: Vec<WindowState>,
     backend: Option<BackendController>,
+    launching: HashMap<String, Instant>,
+}
+
+impl DockState {
+    fn mark_launching(&mut self, app_id: &str) {
+        self.launching.insert(app_id.to_string(), Instant::now());
+    }
+
+    fn is_launching(&self, app_id: &str) -> bool {
+        self.launching.contains_key(app_id)
+    }
+
+    fn prune_launching(&mut self) {
+        self.launching
+            .retain(|_, started_at| started_at.elapsed() < LAUNCH_TIMEOUT);
+    }
+
+    fn reconcile_launching(&mut self) {
+        let opened_apps = self
+            .windows
+            .iter()
+            .filter_map(|window| self.catalog.resolve(window.app_id.as_deref()))
+            .map(|app| app.id)
+            .collect::<HashSet<_>>();
+
+        self.launching
+            .retain(|app_id, _| !opened_apps.contains(app_id.as_str()));
+    }
 }
 
 fn build_ui(app: &gtk::Application) {
@@ -57,6 +86,7 @@ fn build_ui(app: &gtk::Application) {
         pins,
         windows: Vec::new(),
         backend,
+        launching: HashMap::new(),
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -158,7 +188,9 @@ fn build_ui(app: &gtk::Application) {
             let mut changed = false;
             while let Ok(event) = backend_rx.try_recv() {
                 let BackendEvent::Snapshot(snapshot) = event;
-                state.borrow_mut().windows = snapshot;
+                let mut dock_state = state.borrow_mut();
+                dock_state.windows = snapshot;
+                dock_state.reconcile_launching();
                 changed = true;
             }
 
@@ -181,7 +213,12 @@ fn render_dock(
 ) {
     clear_children(items_box);
 
-    let (pinned_items, running_items) = collect_items(&state.borrow());
+    let (pinned_items, running_items) = {
+        let mut dock_state = state.borrow_mut();
+        dock_state.prune_launching();
+        dock_state.reconcile_launching();
+        collect_items(&dock_state)
+    };
     let show_separator = !pinned_items.is_empty() && !running_items.is_empty();
 
     for item in pinned_items {
@@ -231,15 +268,18 @@ fn build_item_widget(
     if !item.windows.is_empty() {
         button.add_css_class("is-running");
     }
+    if item.launching {
+        button.add_css_class("is-launching");
+    }
     button.set_tooltip_text(Some(&item.tooltip));
-    button.set_child(Some(&icon_widget(item.app.as_ref())));
+    button.set_child(Some(&item_visual(item.app.as_ref(), item.launching)));
 
     let indicator = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     indicator.add_css_class("dock-indicator");
     if item.active {
         indicator.add_css_class("is-active");
     }
-    if item.windows.is_empty() {
+    if item.windows.is_empty() && !item.launching {
         indicator.set_opacity(0.0);
     }
 
@@ -247,6 +287,9 @@ fn build_item_widget(
         let state = Rc::clone(state);
         let windows = item.windows.clone();
         let app = item.app.clone();
+        let items_box = items_box.clone();
+        let picker_search = picker_search.clone();
+        let picker_list = picker_list.clone();
         button.connect_clicked(move |_| {
             if let Some(window) = windows
                 .iter()
@@ -257,7 +300,20 @@ fn build_item_widget(
                     backend.activate(&window.id);
                 }
             } else if let Some(app) = app.as_ref() {
-                app.launch();
+                {
+                    let dock_state = state.borrow();
+                    if dock_state.is_launching(&app.id) {
+                        return;
+                    }
+                }
+
+                match app.launch() {
+                    Ok(()) => {
+                        state.borrow_mut().mark_launching(&app.id);
+                        render_dock(&state, &items_box, &picker_search, &picker_list);
+                    }
+                    Err(error) => eprintln!("failed to launch {}: {error}", app.id),
+                }
             }
         });
     }
@@ -321,7 +377,11 @@ fn build_context_menu(
         let new_window = gtk::Button::with_label("Open New Window");
         {
             let app = app.clone();
-            new_window.connect_clicked(move |_| app.launch());
+            new_window.connect_clicked(move |_| {
+                if let Err(error) = app.launch() {
+                    eprintln!("failed to launch {}: {error}", app.id);
+                }
+            });
         }
         layout.append(&new_window);
 
@@ -453,7 +513,8 @@ fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
         .filter_map(|id| {
             let app = state.catalog.app(id)?;
             let windows = known.remove(id).unwrap_or_default();
-            Some(build_known_item(app, windows, true))
+            let launching = state.is_launching(&app.id);
+            Some(build_known_item(app, windows, true, launching))
         })
         .collect::<Vec<_>>();
 
@@ -461,7 +522,8 @@ fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
         .into_iter()
         .filter_map(|(id, windows)| {
             let app = state.catalog.app(&id)?;
-            Some(build_known_item(app, windows, false))
+            let launching = state.is_launching(&app.id);
+            Some(build_known_item(app, windows, false, launching))
         })
         .collect::<Vec<_>>();
 
@@ -477,9 +539,14 @@ fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
     (pinned, running)
 }
 
-fn build_known_item(app: AppRecord, windows: Vec<WindowState>, pinned: bool) -> DockItem {
+fn build_known_item(
+    app: AppRecord,
+    windows: Vec<WindowState>,
+    pinned: bool,
+    launching: bool,
+) -> DockItem {
     let active = windows.iter().any(|window| window.active);
-    let tooltip = tooltip_for(&app.name, &windows);
+    let tooltip = tooltip_for(&app.name, &windows, launching);
     DockItem {
         label: app.name.clone(),
         tooltip,
@@ -487,12 +554,13 @@ fn build_known_item(app: AppRecord, windows: Vec<WindowState>, pinned: bool) -> 
         windows,
         pinned,
         active,
+        launching,
     }
 }
 
 fn build_unknown_item(label: String, windows: Vec<WindowState>) -> DockItem {
     let active = windows.iter().any(|window| window.active);
-    let tooltip = tooltip_for(&label, &windows);
+    let tooltip = tooltip_for(&label, &windows, false);
     DockItem {
         label,
         tooltip,
@@ -500,11 +568,13 @@ fn build_unknown_item(label: String, windows: Vec<WindowState>) -> DockItem {
         windows,
         pinned: false,
         active,
+        launching: false,
     }
 }
 
-fn tooltip_for(label: &str, windows: &[WindowState]) -> String {
+fn tooltip_for(label: &str, windows: &[WindowState], launching: bool) -> String {
     match windows.len() {
+        0 if launching => format!("{label}\nLaunching..."),
         0 => format!("{label}\nLaunch"),
         1 => {
             let title = windows[0].title.as_deref().unwrap_or("Running");
@@ -522,6 +592,25 @@ fn icon_widget(app: Option<&AppRecord>) -> gtk::Image {
     };
     image.set_pixel_size(24);
     image
+}
+
+fn item_visual(app: Option<&AppRecord>, launching: bool) -> gtk::Overlay {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&icon_widget(app)));
+
+    if launching {
+        let spinner = gtk::Spinner::new();
+        spinner.start();
+        spinner.set_halign(gtk::Align::End);
+        spinner.set_valign(gtk::Align::Start);
+        spinner.set_margin_top(4);
+        spinner.set_margin_end(4);
+        spinner.set_size_request(14, 14);
+        spinner.add_css_class("launch-spinner");
+        overlay.add_overlay(&spinner);
+    }
+
+    overlay
 }
 
 fn clear_children(widget: &gtk::Box) {
@@ -597,6 +686,13 @@ const CSS: &str = r#"
     border-color: rgba(255, 214, 120, 0.44);
 }
 
+.dock-item.is-launching {
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255, 214, 120, 0.16), transparent 56%),
+        rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 214, 120, 0.24);
+}
+
 .dock-indicator {
     min-width: 8px;
     min-height: 8px;
@@ -608,6 +704,10 @@ const CSS: &str = r#"
 .dock-indicator.is-active {
     min-width: 18px;
     background: linear-gradient(90deg, #ffd166, #fca311);
+}
+
+.launch-spinner {
+    color: #ffd166;
 }
 
 .dock-separator {
@@ -649,3 +749,5 @@ const CSS: &str = r#"
     border-radius: 14px;
 }
 "#;
+
+const LAUNCH_TIMEOUT: Duration = Duration::from_secs(6);
