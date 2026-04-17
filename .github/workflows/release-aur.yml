@@ -92,7 +92,7 @@ jobs:
       - name: Install dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git curl openssh
+          pacman -S --noconfirm base-devel git curl openssh sudo
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,10 +109,15 @@ jobs:
             "$REPO_NAME" \
             "$sha256"
 
-      - name: Generate .SRCINFO (correct environment)
+      - name: Create builder user
         run: |
-          cd aur-dist
-          makepkg --printsrcinfo > .SRCINFO
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: Generate .SRCINFO (non-root)
+        run: |
+          chown -R builder:builder aur-dist
+          sudo -u builder bash -lc "cd aur-dist && makepkg --printsrcinfo > .SRCINFO"
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
