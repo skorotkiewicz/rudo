@@ -25,7 +25,7 @@ jobs:
       - name: Install system dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git cargo rust pkgconf gtk4 gtk4-layer-shell
+          pacman -S --noconfirm base-devel git cargo rust pkgconf gtk4 gtk4-layer-shell curl
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,31 +81,43 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-release
 
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      PKGVER: ${{ needs.build-release.outputs.version }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Update PKGBUILD version
-        run: |
-          sed -i "s/^pkgver=.*/pkgver=${{ needs.build-release.outputs.version }}/" PKGBUILD
+      - name: Install dependencies (for checksum)
+        run: sudo apt-get update && sudo apt-get install -y curl
 
-      - name: Set pkgrel=1 for new release
+      - name: Generate PKGBUILD dynamically
         run: |
-          sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+          source_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/v${PKGVER}.tar.gz"
+          sha256="$(curl -L "$source_url" | sha256sum | awk '{print $1}')"
+
+          bash ./scripts/render-aur-package.sh aur-dist \
+            "$PACKAGE_NAME" \
+            "$PKGVER" \
+            "$REPO_OWNER" \
+            "$REPO_NAME" \
+            "$sha256"
 
       - name: Generate .SRCINFO
         run: |
-          sudo apt-get update
           sudo apt-get install -y makepkg
+          cd aur-dist
           makepkg --printsrcinfo > .SRCINFO
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v4.1.2
         with:
           pkgname: rudo-bin
-          pkgbuild: ./PKGBUILD
+          pkgbuild: ./aur-dist/PKGBUILD
           assets: |
-            .SRCINFO
+            aur-dist/.SRCINFO
           commit_username: ${{ secrets.AUR_USERNAME }}
           commit_email: ${{ secrets.AUR_EMAIL }}
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
