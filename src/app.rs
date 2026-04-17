@@ -324,26 +324,8 @@ fn build_ui(app: &gtk::Application) {
         });
     }
 
-    {
-        let autohide = Rc::clone(&autohide);
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_enter(move |_, _, _| show_dock(&autohide));
-        window.add_controller(motion);
-    }
-
-    {
-        let autohide = Rc::clone(&autohide);
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_enter(move |_, _, _| show_dock(&autohide));
-        hover_strip.add_controller(motion);
-    }
-
-    {
-        let autohide = Rc::clone(&autohide);
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_leave(move |_| schedule_hide(&autohide));
-        window.add_controller(motion);
-    }
+    install_autohide_hover(&dock_surface, &autohide);
+    install_autohide_hover(&hover_strip, &autohide);
 
     schedule_hide(&autohide);
 
@@ -832,7 +814,23 @@ fn item_visual(app: Option<&AppRecord>, launching: bool) -> gtk::Overlay {
 
 fn clear_children(widget: &gtk::Box) {
     while let Some(child) = widget.first_child() {
+        cleanup_widget_tree(&child);
         widget.remove(&child);
+    }
+}
+
+fn cleanup_widget_tree(widget: &gtk::Widget) {
+    let mut current = widget.first_child();
+    while let Some(child) = current {
+        let next = child.next_sibling();
+        cleanup_widget_tree(&child);
+        current = next;
+    }
+
+    if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
+        popover.popdown();
+        popover.set_child(None::<&gtk::Widget>);
+        popover.unparent();
     }
 }
 
@@ -866,6 +864,18 @@ fn show_dock(autohide: &Rc<RefCell<AutoHideState>>) {
         source.remove();
     }
     state.revealer.set_reveal_child(true);
+}
+
+fn install_autohide_hover(
+    widget: &impl gtk::prelude::IsA<gtk::Widget>,
+    autohide: &Rc<RefCell<AutoHideState>>,
+) {
+    let enter_state = Rc::clone(autohide);
+    let leave_state = Rc::clone(autohide);
+    let motion = gtk::EventControllerMotion::new();
+    motion.connect_enter(move |_, _, _| show_dock(&enter_state));
+    motion.connect_leave(move |_| schedule_hide(&leave_state));
+    widget.add_controller(motion);
 }
 
 fn schedule_hide(autohide: &Rc<RefCell<AutoHideState>>) {
