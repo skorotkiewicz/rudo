@@ -92,6 +92,7 @@ fn build_ui(app: &gtk::Application) {
     install_css();
     config::ensure_settings();
     let settings = config::load_settings();
+    let autohide_enabled = settings.autohide.enabled;
 
     let catalog = AppCatalog::load();
     let mut pins = config::load_pins();
@@ -125,7 +126,13 @@ fn build_ui(app: &gtk::Application) {
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_anchor(Edge::Bottom, true);
         window.set_margin(Edge::Bottom, 6);
-        window.auto_exclusive_zone_enable();
+        if autohide_enabled {
+            // Autohide docks should float over windows when revealed instead of
+            // asking the compositor to relayout the workspace.
+            window.set_exclusive_zone(0);
+        } else {
+            window.auto_exclusive_zone_enable();
+        }
     } else {
         window.set_decorated(false);
     }
@@ -182,7 +189,7 @@ fn build_ui(app: &gtk::Application) {
     hover_strip.add_css_class("dock-hover-strip");
     hover_strip.set_halign(gtk::Align::Center);
     hover_strip.set_hexpand(true);
-    hover_strip.set_visible(settings.autohide.enabled);
+    hover_strip.set_visible(autohide_enabled);
     outer.append(&hover_strip);
     window.set_child(Some(&outer));
 
@@ -190,7 +197,7 @@ fn build_ui(app: &gtk::Application) {
 
     let autohide = Rc::new(RefCell::new(AutoHideState::new(
         &dock_revealer,
-        settings.autohide.enabled,
+        autohide_enabled,
         Duration::from_secs(settings.autohide.delay_secs.max(1)),
     )));
 
