@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use gtk::gdk;
 use gtk::glib::{self, ControlFlow};
@@ -88,15 +88,32 @@ impl AutoHideState {
     }
 }
 
+struct ConfigWatchState {
+    pins_mtime: Option<SystemTime>,
+    settings_mtime: Option<SystemTime>,
+    style_mtime: Option<SystemTime>,
+    settings: config::Settings,
+}
+
+impl ConfigWatchState {
+    fn new(settings: config::Settings) -> Self {
+        Self {
+            pins_mtime: modified_time(config::pins_path().as_deref()),
+            settings_mtime: modified_time(config::settings_path().as_deref()),
+            style_mtime: modified_time(config::style_path().as_deref()),
+            settings,
+        }
+    }
+}
+
 fn build_ui(app: &gtk::Application) {
-    install_css();
+    let user_css_provider = install_css();
     config::ensure_settings();
     let settings = config::load_settings();
     let autohide_enabled = settings.autohide.enabled;
 
     let catalog = AppCatalog::load();
-    let mut pins = config::load_pins();
-    pins.retain(|id| catalog.app(id).is_some());
+    let pins = sanitize_pins(&catalog, config::load_pins());
     config::save_pins(&pins);
 
     let (backend_tx, backend_rx) = mpsc::channel();
@@ -126,13 +143,6 @@ fn build_ui(app: &gtk::Application) {
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_anchor(Edge::Bottom, true);
         window.set_margin(Edge::Bottom, 6);
-        if autohide_enabled {
-            // Autohide docks should float over windows when revealed instead of
-            // asking the compositor to relayout the workspace.
-            window.set_exclusive_zone(0);
-        } else {
-            window.auto_exclusive_zone_enable();
-        }
     } else {
         window.set_decorated(false);
     }
@@ -200,6 +210,8 @@ fn build_ui(app: &gtk::Application) {
         autohide_enabled,
         Duration::from_secs(settings.autohide.delay_secs.max(1)),
     )));
+    apply_autohide_settings(&window, &hover_strip, &autohide, &settings);
+    let config_watch = Rc::new(RefCell::new(ConfigWatchState::new(settings.clone())));
 
     {
         let state = Rc::clone(&state);
@@ -242,6 +254,69 @@ fn build_ui(app: &gtk::Application) {
             }
 
             if changed {
+                render_dock(&state, &items_box, &picker_search, &picker_list);
+            }
+
+            ControlFlow::Continue
+        });
+    }
+
+    {
+        let state = Rc::clone(&state);
+        let autohide = Rc::clone(&autohide);
+        let config_watch = Rc::clone(&config_watch);
+        let items_box = items_box.clone();
+        let picker_search = picker_search.clone();
+        let picker_list = picker_list.clone();
+        let hover_strip = hover_strip.clone();
+        let window = window.clone();
+        let user_css_provider = user_css_provider.clone();
+
+        glib::timeout_add_local(Duration::from_millis(700), move || {
+            let mut rerender = false;
+            let mut settings_to_apply = None;
+
+            {
+                let mut watch = config_watch.borrow_mut();
+
+                let pins_mtime = modified_time(config::pins_path().as_deref());
+                if pins_mtime != watch.pins_mtime {
+                    watch.pins_mtime = pins_mtime;
+                    let mut dock_state = state.borrow_mut();
+                    let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
+                    if dock_state.pins != pins {
+                        dock_state.pins = pins.clone();
+                        config::save_pins(&pins);
+                        rerender = true;
+                    }
+                }
+
+                let settings_mtime = modified_time(config::settings_path().as_deref());
+                if settings_mtime != watch.settings_mtime {
+                    watch.settings_mtime = settings_mtime;
+                    let new_settings = config::load_settings();
+                    if new_settings != watch.settings {
+                        watch.settings = new_settings.clone();
+                        settings_to_apply = Some(new_settings);
+                    }
+                }
+
+                let style_mtime = modified_time(config::style_path().as_deref());
+                if style_mtime != watch.style_mtime {
+                    watch.style_mtime = style_mtime;
+                    if let Some(provider) = user_css_provider.as_ref() {
+                        provider.load_from_data(&config::load_style_css().unwrap_or_default());
+                    }
+                    rerender = true;
+                }
+            }
+
+            if let Some(new_settings) = settings_to_apply {
+                apply_autohide_settings(&window, &hover_strip, &autohide, &new_settings);
+                rerender = true;
+            }
+
+            if rerender {
                 render_dock(&state, &items_box, &picker_search, &picker_list);
             }
 
@@ -426,6 +501,20 @@ fn build_item_widget(
 
     wrapper.append(&button);
     wrapper.append(&indicator);
+
+    if item.pinned
+        && let Some(app) = item.app.as_ref()
+    {
+        install_pin_drag_and_drop(
+            &wrapper,
+            state,
+            items_box,
+            picker_search,
+            picker_list,
+            &app.id,
+        );
+    }
+
     wrapper
 }
 
@@ -443,7 +532,50 @@ fn build_context_menu(
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 6);
     layout.add_css_class("item-menu");
 
+    let title = gtk::Label::new(Some(&item.label));
+    title.set_xalign(0.0);
+    title.add_css_class("item-menu-title");
+    layout.append(&title);
+
+    if let Some(app) = item.app.as_ref() {
+        let subtitle = gtk::Label::new(Some(&app.id));
+        subtitle.set_xalign(0.0);
+        subtitle.add_css_class("item-menu-subtitle");
+        layout.append(&subtitle);
+    }
+
+    if !item.windows.is_empty() {
+        layout.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+        let windows_label = gtk::Label::new(Some("Windows"));
+        windows_label.set_xalign(0.0);
+        windows_label.add_css_class("item-menu-section");
+        layout.append(&windows_label);
+
+        let multiple = item.windows.len() > 1;
+        for window in item.windows.iter().take(8) {
+            let focus_window = gtk::Button::with_label(&window_menu_label(window, multiple));
+            if window.active {
+                focus_window.add_css_class("is-active");
+            }
+            {
+                let state = Rc::clone(&state);
+                let window = window.clone();
+                let popover = popover.clone();
+                focus_window.connect_clicked(move |_| {
+                    if let Some(backend) = state.borrow().backend.as_ref() {
+                        backend.activate(&window.id);
+                    }
+                    popover.popdown();
+                });
+            }
+            layout.append(&focus_window);
+        }
+    }
+
     if let Some(app) = item.app.clone() {
+        layout.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
         let new_window = gtk::Button::with_label("Open New Window");
         {
             let app = app.clone();
@@ -482,6 +614,21 @@ fn build_context_menu(
     }
 
     if !item.windows.is_empty() {
+        if let Some(active_window) = item.windows.iter().find(|window| window.active).cloned() {
+            let close_active = gtk::Button::with_label("Close Focused Window");
+            {
+                let state = Rc::clone(&state);
+                let popover = popover.clone();
+                close_active.connect_clicked(move |_| {
+                    if let Some(backend) = state.borrow().backend.as_ref() {
+                        backend.close(&active_window.id);
+                    }
+                    popover.popdown();
+                });
+            }
+            layout.append(&close_active);
+        }
+
         let close_all = gtk::Button::with_label(if item.windows.len() > 1 {
             "Close All Windows"
         } else {
@@ -689,7 +836,7 @@ fn clear_children(widget: &gtk::Box) {
     }
 }
 
-fn install_css() {
+fn install_css() -> Option<gtk::CssProvider> {
     if let Some(display) = gdk::Display::default() {
         let provider = gtk::CssProvider::new();
         provider.load_from_data(CSS);
@@ -700,16 +847,17 @@ fn install_css() {
         );
 
         config::ensure_style_css();
-        if let Some(user_css) = config::load_style_css() {
-            let user_provider = gtk::CssProvider::new();
-            user_provider.load_from_data(&user_css);
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &user_provider,
-                gtk::STYLE_PROVIDER_PRIORITY_USER,
-            );
-        }
+        let user_provider = gtk::CssProvider::new();
+        user_provider.load_from_data(&config::load_style_css().unwrap_or_default());
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &user_provider,
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        return Some(user_provider);
     }
+
+    None
 }
 
 fn show_dock(autohide: &Rc<RefCell<AutoHideState>>) {
@@ -748,6 +896,181 @@ fn schedule_hide(autohide: &Rc<RefCell<AutoHideState>>) {
     autohide.borrow_mut().hide_source = Some(source);
 }
 
+fn apply_autohide_settings(
+    window: &gtk::ApplicationWindow,
+    hover_strip: &gtk::Box,
+    autohide: &Rc<RefCell<AutoHideState>>,
+    settings: &config::Settings,
+) {
+    let enabled = settings.autohide.enabled;
+    let delay = Duration::from_secs(settings.autohide.delay_secs.max(1));
+
+    if gtk4_layer_shell::is_supported() {
+        if enabled {
+            // Hover-revealed dock floats above windows instead of relayouting them.
+            window.set_exclusive_zone(0);
+        } else {
+            window.auto_exclusive_zone_enable();
+        }
+    }
+
+    hover_strip.set_visible(enabled);
+
+    {
+        let mut state = autohide.borrow_mut();
+        if let Some(source) = state.hide_source.take() {
+            source.remove();
+        }
+        state.enabled = enabled;
+        state.delay = delay;
+    }
+
+    if enabled {
+        show_dock(autohide);
+        schedule_hide(autohide);
+    } else {
+        show_dock(autohide);
+    }
+}
+
+fn install_pin_drag_and_drop(
+    wrapper: &gtk::Box,
+    state: &Rc<RefCell<DockState>>,
+    items_box: &gtk::Box,
+    picker_search: &gtk::SearchEntry,
+    picker_list: &gtk::Box,
+    pin_id: &str,
+) {
+    let drag_source = gtk::DragSource::new();
+    drag_source.set_actions(gdk::DragAction::MOVE);
+    let source_pin = pin_id.to_string();
+    drag_source.connect_prepare(move |_, _, _| {
+        Some(gdk::ContentProvider::for_value(&source_pin.to_value()))
+    });
+    wrapper.add_controller(drag_source);
+
+    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+
+    {
+        let wrapper = wrapper.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            wrapper.add_css_class("is-drop-target");
+            gdk::DragAction::MOVE
+        });
+    }
+
+    {
+        let wrapper = wrapper.clone();
+        drop_target.connect_leave(move |_| {
+            wrapper.remove_css_class("is-drop-target");
+        });
+    }
+
+    {
+        let state = Rc::clone(state);
+        let items_box = items_box.clone();
+        let picker_search = picker_search.clone();
+        let picker_list = picker_list.clone();
+        let target_pin = pin_id.to_string();
+        let wrapper = wrapper.clone();
+
+        drop_target.connect_drop(move |_, value, x, _| {
+            wrapper.remove_css_class("is-drop-target");
+
+            let Ok(dragged_pin) = value.get::<String>() else {
+                return false;
+            };
+
+            let insert_after = x > f64::from(wrapper.allocated_width()) / 2.0;
+            let changed = {
+                let mut dock_state = state.borrow_mut();
+                reorder_pins(
+                    &mut dock_state.pins,
+                    &dragged_pin,
+                    &target_pin,
+                    insert_after,
+                )
+            };
+
+            if changed {
+                config::save_pins(&state.borrow().pins);
+                render_dock(&state, &items_box, &picker_search, &picker_list);
+            }
+
+            changed
+        });
+    }
+
+    wrapper.add_controller(drop_target);
+}
+
+fn reorder_pins(
+    pins: &mut Vec<String>,
+    dragged_pin: &str,
+    target_pin: &str,
+    insert_after: bool,
+) -> bool {
+    if dragged_pin == target_pin {
+        return false;
+    }
+
+    let Some(source_idx) = pins.iter().position(|pin| pin == dragged_pin) else {
+        return false;
+    };
+    let Some(mut target_idx) = pins.iter().position(|pin| pin == target_pin) else {
+        return false;
+    };
+
+    let dragged = pins.remove(source_idx);
+    if source_idx < target_idx {
+        target_idx -= 1;
+    }
+    if insert_after {
+        target_idx += 1;
+    }
+
+    pins.insert(target_idx.min(pins.len()), dragged);
+    true
+}
+
+fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut sanitized = Vec::new();
+
+    for pin in pins {
+        let Some(app) = catalog.app(&pin) else {
+            continue;
+        };
+
+        if seen.insert(app.id.clone()) {
+            sanitized.push(app.id);
+        }
+    }
+
+    sanitized
+}
+
+fn window_menu_label(window: &WindowState, multiple: bool) -> String {
+    let title = window.title.as_deref().unwrap_or("Untitled Window");
+
+    if multiple {
+        if window.active {
+            format!("Focus {title} (active)")
+        } else {
+            format!("Focus {title}")
+        }
+    } else if window.active {
+        format!("Focus {title} (active)")
+    } else {
+        "Focus Window".to_string()
+    }
+}
+
+fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
+    path.and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|metadata| metadata.modified().ok())
+}
+
 const CSS: &str = r#"
 .rudo-window {
     background: transparent;
@@ -779,6 +1102,11 @@ const CSS: &str = r#"
 .picker-button:hover {
     background: rgba(255, 255, 255, 0.09);
     border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dock-item.is-drop-target {
+    border-color: rgba(255, 214, 120, 0.48);
+    background: rgba(255, 214, 120, 0.12);
 }
 
 .dock-item.is-running {
@@ -857,6 +1185,15 @@ const CSS: &str = r#"
 
 .item-menu {
     padding: 10px;
+}
+
+.item-menu-title {
+    font-weight: 700;
+}
+
+.item-menu-subtitle,
+.item-menu-section {
+    opacity: 0.68;
 }
 
 .item-menu button {

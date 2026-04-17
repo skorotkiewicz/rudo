@@ -8,13 +8,13 @@ struct PinStore {
     pins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub autohide: AutoHideSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoHideSettings {
     pub enabled: bool,
@@ -135,15 +135,15 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(base.join("rudo"))
 }
 
-fn pins_path() -> Option<PathBuf> {
+pub fn pins_path() -> Option<PathBuf> {
     Some(config_dir()?.join("pins.json"))
 }
 
-fn style_path() -> Option<PathBuf> {
+pub fn style_path() -> Option<PathBuf> {
     Some(config_dir()?.join("style.css"))
 }
 
-fn settings_path() -> Option<PathBuf> {
+pub fn settings_path() -> Option<PathBuf> {
     Some(config_dir()?.join("settings.json"))
 }
 
