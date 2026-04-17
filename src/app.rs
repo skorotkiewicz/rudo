@@ -70,8 +70,28 @@ impl DockState {
     }
 }
 
+struct AutoHideState {
+    revealer: gtk::Revealer,
+    hide_source: Option<glib::SourceId>,
+    enabled: bool,
+    delay: Duration,
+}
+
+impl AutoHideState {
+    fn new(revealer: &gtk::Revealer, enabled: bool, delay: Duration) -> Self {
+        Self {
+            revealer: revealer.clone(),
+            hide_source: None,
+            enabled,
+            delay,
+        }
+    }
+}
+
 fn build_ui(app: &gtk::Application) {
     install_css();
+    config::ensure_settings();
+    let settings = config::load_settings();
 
     let catalog = AppCatalog::load();
     let mut pins = config::load_pins();
@@ -115,6 +135,12 @@ fn build_ui(app: &gtk::Application) {
     outer.set_valign(gtk::Align::End);
     outer.set_margin_bottom(0);
 
+    let dock_revealer = gtk::Revealer::builder()
+        .transition_type(gtk::RevealerTransitionType::SlideUp)
+        .transition_duration(220)
+        .reveal_child(true)
+        .build();
+
     let dock_surface = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     dock_surface.add_css_class("dock-surface");
 
@@ -149,10 +175,24 @@ fn build_ui(app: &gtk::Application) {
 
     dock_surface.append(&items_box);
     dock_surface.append(&picker_button);
-    outer.append(&dock_surface);
+    dock_revealer.set_child(Some(&dock_surface));
+    outer.append(&dock_revealer);
+
+    let hover_strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    hover_strip.add_css_class("dock-hover-strip");
+    hover_strip.set_halign(gtk::Align::Center);
+    hover_strip.set_hexpand(true);
+    hover_strip.set_visible(settings.autohide.enabled);
+    outer.append(&hover_strip);
     window.set_child(Some(&outer));
 
     render_dock(&state, &items_box, &picker_search, &picker_list);
+
+    let autohide = Rc::new(RefCell::new(AutoHideState::new(
+        &dock_revealer,
+        settings.autohide.enabled,
+        Duration::from_secs(settings.autohide.delay_secs.max(1)),
+    )));
 
     {
         let state = Rc::clone(&state);
@@ -201,6 +241,29 @@ fn build_ui(app: &gtk::Application) {
             ControlFlow::Continue
         });
     }
+
+    {
+        let autohide = Rc::clone(&autohide);
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_enter(move |_, _, _| show_dock(&autohide));
+        window.add_controller(motion);
+    }
+
+    {
+        let autohide = Rc::clone(&autohide);
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_enter(move |_, _, _| show_dock(&autohide));
+        hover_strip.add_controller(motion);
+    }
+
+    {
+        let autohide = Rc::clone(&autohide);
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_leave(move |_| schedule_hide(&autohide));
+        window.add_controller(motion);
+    }
+
+    schedule_hide(&autohide);
 
     window.present();
 }
@@ -642,6 +705,42 @@ fn install_css() {
     }
 }
 
+fn show_dock(autohide: &Rc<RefCell<AutoHideState>>) {
+    let mut state = autohide.borrow_mut();
+    if let Some(source) = state.hide_source.take() {
+        source.remove();
+    }
+    state.revealer.set_reveal_child(true);
+}
+
+fn schedule_hide(autohide: &Rc<RefCell<AutoHideState>>) {
+    let delay = {
+        let state = autohide.borrow();
+        if !state.enabled {
+            state.revealer.set_reveal_child(true);
+            return;
+        }
+        state.delay
+    };
+
+    {
+        let mut state = autohide.borrow_mut();
+        if let Some(source) = state.hide_source.take() {
+            source.remove();
+        }
+    }
+
+    let autohide_for_timeout = Rc::clone(autohide);
+    let source = glib::timeout_add_local(delay, move || {
+        let mut state = autohide_for_timeout.borrow_mut();
+        state.revealer.set_reveal_child(false);
+        state.hide_source = None;
+        ControlFlow::Break
+    });
+
+    autohide.borrow_mut().hide_source = Some(source);
+}
+
 const CSS: &str = r#"
 .rudo-window {
     background: transparent;
@@ -714,6 +813,14 @@ const CSS: &str = r#"
     min-height: 44px;
     margin: 0 2px;
     opacity: 0.28;
+}
+
+.dock-hover-strip {
+    min-width: 220px;
+    min-height: 8px;
+    margin-top: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
 }
 
 .picker {

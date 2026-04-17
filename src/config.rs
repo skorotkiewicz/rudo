@@ -8,6 +8,28 @@ struct PinStore {
     pins: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub autohide: AutoHideSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoHideSettings {
+    pub enabled: bool,
+    pub delay_secs: u64,
+}
+
+impl Default for AutoHideSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            delay_secs: 3,
+        }
+    }
+}
+
 pub fn load_pins() -> Vec<String> {
     let Some(path) = pins_path() else {
         return Vec::new();
@@ -50,6 +72,24 @@ pub fn ensure_style_css() {
     }
 }
 
+pub fn ensure_settings() {
+    if let Err(error) = ensure_settings_inner() {
+        eprintln!("failed to prepare dock settings config: {error}");
+    }
+}
+
+pub fn load_settings() -> Settings {
+    let Some(path) = settings_path() else {
+        return Settings::default();
+    };
+
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Settings::default();
+    };
+
+    serde_json::from_str::<Settings>(&contents).unwrap_or_default()
+}
+
 pub fn load_style_css() -> Option<String> {
     let path = style_path()?;
     fs::read_to_string(path).ok()
@@ -72,6 +112,24 @@ fn ensure_style_css_inner() -> Result<(), Box<dyn std::error::Error + Send + Syn
     Ok(())
 }
 
+fn ensure_settings_inner() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(path) = settings_path() else {
+        return Ok(());
+    };
+
+    if path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let contents = serde_json::to_string_pretty(&Settings::default())?;
+    fs::write(path, contents)?;
+    Ok(())
+}
+
 pub fn config_dir() -> Option<PathBuf> {
     let base = dirs::config_dir()?;
     Some(base.join("rudo"))
@@ -83,6 +141,10 @@ fn pins_path() -> Option<PathBuf> {
 
 fn style_path() -> Option<PathBuf> {
     Some(config_dir()?.join("style.css"))
+}
+
+fn settings_path() -> Option<PathBuf> {
+    Some(config_dir()?.join("settings.json"))
 }
 
 const DEFAULT_STYLE_CSS: &str = r#"/* Rudo user overrides
