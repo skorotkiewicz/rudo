@@ -1,0 +1,146 @@
+name: Release And Publish AUR
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGE_NAME: rudo-bin
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      asset_name: ${{ steps.bundle.outputs.asset_name }}
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git cargo rust pkgconf gtk4 gtk4-layer-shell
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version
+        id: meta
+        shell: bash
+        run: |
+          ref_name="${GITHUB_REF_NAME:-}"
+          version="${ref_name#v}"
+          if [[ -z "$version" || "$version" == "$ref_name" ]]; then
+            version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Bundle release archive
+        id: bundle
+        shell: bash
+        run: |
+          version='${{ steps.meta.outputs.version }}'
+          mkdir -p dist
+          asset_name="rudo-${version}-x86_64-linux.tar.gz"
+          tar -C target/release -czf "dist/${asset_name}" rudo
+          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-archive
+          path: dist/${{ steps.bundle.outputs.asset_name }}
+
+  publish-github-release:
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - name: Download built archive
+        uses: actions/download-artifact@v4
+        with:
+          name: release-archive
+          path: dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ needs.build-release.outputs.asset_name }}
+          generate_release_notes: true
+
+  publish-aur:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    needs: build-release
+    env:
+      AUR_PACKAGE_NAME: rudo-bin
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+      AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      PKGVER: ${{ needs.build-release.outputs.version }}
+    steps:
+      - name: Install packaging dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git openssh curl
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate AUR secrets
+        shell: bash
+        run: |
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          test -n "$AUR_EMAIL"
+          test -n "$AUR_USERNAME"
+
+      - name: Configure SSH for AUR
+        shell: bash
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+              User aur
+              IdentityFile ~/.ssh/aur
+              IdentitiesOnly yes
+          EOF
+
+      - name: Generate PKGBUILD
+        shell: bash
+        run: |
+          source_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/v${PKGVER}.tar.gz"
+          sha256="$(curl -L "$source_url" | sha256sum | awk '{print $1}')"
+          bash ./scripts/render-aur-package.sh aur-dist "$AUR_PACKAGE_NAME" "$PKGVER" "$REPO_OWNER" "$REPO_NAME" "$sha256"
+          (
+            cd aur-dist
+            makepkg --printsrcinfo > .SRCINFO
+          )
+
+      - name: Publish AUR package repo
+        shell: bash
+        run: |
+          git config --global user.name "$AUR_USERNAME"
+          git config --global user.email "$AUR_EMAIL"
+          git clone "ssh://aur@aur.archlinux.org/${AUR_PACKAGE_NAME}.git" aur-repo
+          cp aur-dist/PKGBUILD aur-dist/.SRCINFO aur-repo/
+          cd aur-repo
+          if git diff --quiet -- PKGBUILD .SRCINFO; then
+            echo "AUR package already up to date."
+            exit 0
+          fi
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update ${AUR_PACKAGE_NAME} to ${PKGVER}"
+          git push origin HEAD
