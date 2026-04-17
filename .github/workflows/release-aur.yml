@@ -80,6 +80,8 @@ jobs:
   aur-publish:
     runs-on: ubuntu-latest
     needs: build-release
+    container:
+      image: archlinux:latest
 
     env:
       REPO_OWNER: ${{ github.repository_owner }}
@@ -87,11 +89,13 @@ jobs:
       PKGVER: ${{ needs.build-release.outputs.version }}
 
     steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm base-devel git curl openssh
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install dependencies (for checksum)
-        run: sudo apt-get update && sudo apt-get install -y curl
 
       - name: Generate PKGBUILD dynamically
         run: |
@@ -105,9 +109,8 @@ jobs:
             "$REPO_NAME" \
             "$sha256"
 
-      - name: Generate .SRCINFO
+      - name: Generate .SRCINFO (correct environment)
         run: |
-          sudo apt-get install -y makepkg
           cd aur-dist
           makepkg --printsrcinfo > .SRCINFO
 
