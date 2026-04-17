@@ -1,5 +1,7 @@
 # rudo
 
+![Rodo](docs/example.png)
+
 A small, elegant dock for Wayland.
 
 `rudo` is built for a clean desktop: pinned apps, live running windows, gentle autohide, and simple user configuration. It is designed to feel at home on `niri`, while still working with other Wayland compositors that expose the right protocols.
