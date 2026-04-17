@@ -92,10 +92,20 @@ jobs:
       - name: Install packaging dependencies
         run: |
           pacman -Syu --noconfirm
-          pacman -S --noconfirm base-devel git openssh curl
+          pacman -S --noconfirm base-devel git openssh curl sudo
+
+      - name: Create non-root builder user
+        shell: bash
+        run: |
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set workspace ownership for builder
+        shell: bash
+        run: chown -R builder:builder "$GITHUB_WORKSPACE"
 
       - name: Validate AUR secrets
         shell: bash
@@ -124,10 +134,8 @@ jobs:
           source_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/v${PKGVER}.tar.gz"
           sha256="$(curl -L "$source_url" | sha256sum | awk '{print $1}')"
           bash ./scripts/render-aur-package.sh aur-dist "$AUR_PACKAGE_NAME" "$PKGVER" "$REPO_OWNER" "$REPO_NAME" "$sha256"
-          (
-            cd aur-dist
-            makepkg --printsrcinfo > .SRCINFO
-          )
+          chown -R builder:builder "$GITHUB_WORKSPACE/aur-dist"
+          sudo -u builder -E HOME=/home/builder bash -lc "cd '$GITHUB_WORKSPACE/aur-dist' && makepkg --printsrcinfo > .SRCINFO"
 
       - name: Publish AUR package repo
         shell: bash
