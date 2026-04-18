@@ -72,9 +72,15 @@ Default `settings.json`:
     "delay_secs": 3
   },
   "show_pin_button": true,
-  "icon_size": 24
+  "icon_size": 24,
+  "position": "bottom",
+  "animation_duration_ms": 220
 }
 ```
+
+- **position**: `"bottom"`, `"top"`, `"left"`, `"right"` (requires restart)
+- **icon_size**: Size in pixels (default: 24)
+- **animation_duration_ms**: Show/hide animation in milliseconds (default: 220)
 
 `style.css` is loaded on every start after the built-in theme, so you can override the dock without rebuilding.
 

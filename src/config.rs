@@ -14,6 +14,8 @@ pub struct Settings {
     pub autohide: AutoHideSettings,
     pub show_pin_button: bool,
     pub icon_size: i32,
+    pub position: String,
+    pub animation_duration_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,8 @@ impl Default for Settings {
             autohide: AutoHideSettings::default(),
             show_pin_button: true,
             icon_size: 24,
+            position: "bottom".to_string(),
+            animation_duration_ms: 220,
         }
     }
 }

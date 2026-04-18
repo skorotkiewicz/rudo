@@ -113,6 +113,7 @@ fn build_ui(app: &gtk::Application) {
     let settings = config::load_settings();
     let autohide_enabled = settings.autohide.enabled;
     let show_pin_button = settings.show_pin_button;
+    let position = settings.position.clone();
 
     let catalog = AppCatalog::load();
     let pins = sanitize_pins(&catalog, config::load_pins());
@@ -139,32 +140,46 @@ fn build_ui(app: &gtk::Application) {
         .build();
     window.add_css_class("rudo-window");
 
+    // Parse position and set up dock orientation
+    let (anchor_edge, transition_type, orientation, halign, valign, margin_edge) = 
+        match position.as_str() {
+            "top" => (Edge::Top, gtk::RevealerTransitionType::SlideDown, gtk::Orientation::Vertical, gtk::Align::Center, gtk::Align::Start, Edge::Top),
+            "left" => (Edge::Left, gtk::RevealerTransitionType::SlideRight, gtk::Orientation::Horizontal, gtk::Align::Start, gtk::Align::Center, Edge::Left),
+            "right" => (Edge::Right, gtk::RevealerTransitionType::SlideLeft, gtk::Orientation::Horizontal, gtk::Align::End, gtk::Align::Center, Edge::Right),
+            _ => (Edge::Bottom, gtk::RevealerTransitionType::SlideUp, gtk::Orientation::Vertical, gtk::Align::Center, gtk::Align::End, Edge::Bottom),
+        };
+
     if gtk4_layer_shell::is_supported() {
         window.init_layer_shell();
         window.set_namespace(Some("rudo-dock"));
         window.set_layer(Layer::Top);
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_anchor(Edge::Bottom, true);
-        window.set_margin(Edge::Bottom, 6);
+        window.set_anchor(anchor_edge, true);
+        window.set_margin(margin_edge, 6);
     } else {
         window.set_decorated(false);
     }
 
-    let outer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    outer.set_halign(gtk::Align::Center);
-    outer.set_valign(gtk::Align::End);
-    outer.set_margin_bottom(0);
+    let outer = gtk::Box::new(orientation, 0);
+    outer.set_halign(halign);
+    outer.set_valign(valign);
 
     let dock_revealer = gtk::Revealer::builder()
-        .transition_type(gtk::RevealerTransitionType::SlideUp)
-        .transition_duration(220)
+        .transition_type(transition_type)
+        .transition_duration(settings.animation_duration_ms)
         .reveal_child(true)
         .build();
 
-    let dock_surface = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let dock_surface = gtk::Box::new(
+        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
+        12
+    );
     dock_surface.add_css_class("dock-surface");
 
-    let items_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    let items_box = gtk::Box::new(
+        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
+        10
+    );
     items_box.set_valign(gtk::Align::Center);
 
     let picker_button = gtk::Button::new();
@@ -199,9 +214,13 @@ fn build_ui(app: &gtk::Application) {
     dock_revealer.set_child(Some(&dock_surface));
     outer.append(&dock_revealer);
 
-    let hover_strip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let hover_strip = gtk::Box::new(
+        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
+        0
+    );
     hover_strip.add_css_class("dock-hover-strip");
-    hover_strip.set_halign(gtk::Align::Center);
+    hover_strip.set_halign(halign);
+    hover_strip.set_valign(valign);
     hover_strip.set_hexpand(true);
     hover_strip.set_visible(autohide_enabled);
     outer.append(&hover_strip);
