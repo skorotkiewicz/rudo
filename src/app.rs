@@ -205,7 +205,17 @@ fn build_ui(app: &gtk::Application) {
     outer.append(&hover_strip);
     window.set_child(Some(&outer));
 
-    render_dock(&state, &items_box, &picker_search, &picker_list);
+    render_dock(
+        &state,
+        &items_box,
+        &picker_search,
+        &picker_list,
+        &Rc::new(RefCell::new(AutoHideState::new(
+            &dock_revealer,
+            autohide_enabled,
+            Duration::from_secs(settings.autohide.delay_secs.max(1)),
+        ))),
+    );
 
     let autohide = Rc::new(RefCell::new(AutoHideState::new(
         &dock_revealer,
@@ -217,6 +227,7 @@ fn build_ui(app: &gtk::Application) {
 
     {
         let state = Rc::clone(&state);
+        let autohide = Rc::clone(&autohide);
         let items_box = items_box.clone();
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
@@ -226,7 +237,7 @@ fn build_ui(app: &gtk::Application) {
             render_picker(&state, &picker_list, "");
             picker_popover.popup();
             picker_search.grab_focus();
-            render_dock(&state, &items_box, &picker_search, &picker_list);
+            render_dock(&state, &items_box, &picker_search, &picker_list, &autohide);
         });
     }
 
@@ -240,6 +251,7 @@ fn build_ui(app: &gtk::Application) {
 
     {
         let state = Rc::clone(&state);
+        let autohide_for_rx = Rc::clone(&autohide);
         let items_box = items_box.clone();
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
@@ -256,7 +268,13 @@ fn build_ui(app: &gtk::Application) {
             }
 
             if changed {
-                render_dock(&state, &items_box, &picker_search, &picker_list);
+                render_dock(
+                    &state,
+                    &items_box,
+                    &picker_search,
+                    &picker_list,
+                    &autohide_for_rx,
+                );
             }
 
             ControlFlow::Continue
@@ -321,7 +339,7 @@ fn build_ui(app: &gtk::Application) {
             }
 
             if rerender {
-                render_dock(&state, &items_box, &picker_search, &picker_list);
+                render_dock(&state, &items_box, &picker_search, &picker_list, &autohide);
             }
 
             ControlFlow::Continue
@@ -341,6 +359,7 @@ fn render_dock(
     items_box: &gtk::Box,
     picker_search: &gtk::SearchEntry,
     picker_list: &gtk::Box,
+    autohide: &Rc<RefCell<AutoHideState>>,
 ) {
     clear_children(items_box);
 
@@ -359,6 +378,7 @@ fn render_dock(
             items_box,
             picker_search,
             picker_list,
+            autohide,
         ));
     }
 
@@ -375,6 +395,7 @@ fn render_dock(
             items_box,
             picker_search,
             picker_list,
+            autohide,
         ));
     }
 
@@ -387,6 +408,7 @@ fn build_item_widget(
     items_box: &gtk::Box,
     picker_search: &gtk::SearchEntry,
     picker_list: &gtk::Box,
+    autohide: &Rc<RefCell<AutoHideState>>,
 ) -> gtk::Box {
     let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 4);
     wrapper.set_valign(gtk::Align::Center);
@@ -416,6 +438,7 @@ fn build_item_widget(
 
     {
         let state = Rc::clone(state);
+        let autohide = Rc::clone(autohide);
         let windows = item.windows.clone();
         let app = item.app.clone();
         let items_box = items_box.clone();
@@ -441,7 +464,7 @@ fn build_item_widget(
                 match app.launch() {
                     Ok(()) => {
                         state.borrow_mut().mark_launching(&app.id);
-                        render_dock(&state, &items_box, &picker_search, &picker_list);
+                        render_dock(&state, &items_box, &picker_search, &picker_list, &autohide);
                     }
                     Err(error) => eprintln!("failed to launch {}: {error}", app.id),
                 }
@@ -451,12 +474,19 @@ fn build_item_widget(
 
     {
         let state = Rc::clone(state);
+        let autohide_for_closure = Rc::clone(autohide);
         let item = item.clone();
         let items_box = items_box.clone();
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
-        let popover = build_context_menu(Rc::clone(&state), &button, item, move || {
-            render_dock(&state, &items_box, &picker_search, &picker_list)
+        let popover = build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
+            render_dock(
+                &state,
+                &items_box,
+                &picker_search,
+                &picker_list,
+                &autohide_for_closure,
+            )
         });
 
         let gesture = gtk::GestureClick::new();
@@ -498,6 +528,7 @@ fn build_item_widget(
             picker_search,
             picker_list,
             &app.id,
+            autohide,
         );
     }
 
@@ -508,12 +539,15 @@ fn build_context_menu(
     state: Rc<RefCell<DockState>>,
     parent: &impl gtk::prelude::IsA<gtk::Widget>,
     item: DockItem,
+    autohide: &Rc<RefCell<AutoHideState>>,
     rerender: impl Fn() + 'static,
 ) -> gtk::Popover {
     let popover = gtk::Popover::new();
     popover.set_has_arrow(false);
     popover.set_position(gtk::PositionType::Top);
     popover.set_parent(parent);
+
+    install_autohide_hover(&popover, autohide);
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 6);
     layout.add_css_class("item-menu");
@@ -954,6 +988,7 @@ fn install_pin_drag_and_drop(
     picker_search: &gtk::SearchEntry,
     picker_list: &gtk::Box,
     pin_id: &str,
+    autohide: &Rc<RefCell<AutoHideState>>,
 ) {
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
@@ -982,6 +1017,7 @@ fn install_pin_drag_and_drop(
 
     {
         let state = Rc::clone(state);
+        let autohide = Rc::clone(autohide);
         let items_box = items_box.clone();
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
@@ -1008,7 +1044,7 @@ fn install_pin_drag_and_drop(
 
             if changed {
                 config::save_pins(&state.borrow().pins);
-                render_dock(&state, &items_box, &picker_search, &picker_list);
+                render_dock(&state, &items_box, &picker_search, &picker_list, &autohide);
             }
 
             changed
