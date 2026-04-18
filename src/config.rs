@@ -13,6 +13,7 @@ struct PinStore {
 pub struct Settings {
     pub autohide: AutoHideSettings,
     pub show_pin_button: bool,
+    pub icon_size: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +37,7 @@ impl Default for Settings {
         Self {
             autohide: AutoHideSettings::default(),
             show_pin_button: true,
+            icon_size: 24,
         }
     }
 }

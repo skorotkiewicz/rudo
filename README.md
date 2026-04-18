@@ -71,7 +71,8 @@ Default `settings.json`:
     "enabled": true,
     "delay_secs": 3
   },
-  "show_pin_button": true
+  "show_pin_button": true,
+  "icon_size": 24
 }
 ```
 

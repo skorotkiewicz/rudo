@@ -41,6 +41,7 @@ struct DockState {
     windows: Vec<WindowState>,
     backend: Option<BackendController>,
     launching: HashMap<String, Instant>,
+    icon_size: i32,
 }
 
 impl DockState {
@@ -126,6 +127,7 @@ fn build_ui(app: &gtk::Application) {
         windows: Vec::new(),
         backend,
         launching: HashMap::new(),
+        icon_size: settings.icon_size,
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -169,7 +171,7 @@ fn build_ui(app: &gtk::Application) {
     picker_button.add_css_class("dock-item");
     picker_button.add_css_class("picker-button");
     picker_button.set_tooltip_text(Some("Pin an application"));
-    picker_button.set_child(Some(&icon_widget(None)));
+    picker_button.set_child(Some(&icon_widget(None, settings.icon_size)));
     picker_button.set_visible(show_pin_button);
 
     let picker_popover = gtk::Popover::new();
@@ -426,7 +428,8 @@ fn build_item_widget(
         button.add_css_class("is-launching");
     }
     button.set_tooltip_text(Some(&item.tooltip));
-    button.set_child(Some(&item_visual(item.app.as_ref(), item.launching)));
+    let icon_size = state.borrow().icon_size;
+    button.set_child(Some(&item_visual(item.app.as_ref(), item.launching, icon_size)));
 
     let indicator = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     indicator.add_css_class("dock-indicator");
@@ -695,7 +698,8 @@ fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::Box, query: 
         row_button.add_css_class("picker-row");
 
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let icon = icon_widget(Some(&app));
+        let icon_size = state.borrow().icon_size;
+        let icon = icon_widget(Some(&app), icon_size);
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let title = gtk::Label::new(Some(&app.name));
         title.set_xalign(0.0);
@@ -822,19 +826,19 @@ fn tooltip_for(label: &str, windows: &[WindowState], launching: bool) -> String 
     }
 }
 
-fn icon_widget(app: Option<&AppRecord>) -> gtk::Image {
+fn icon_widget(app: Option<&AppRecord>, icon_size: i32) -> gtk::Image {
     let image = if let Some(icon) = app.and_then(|app| app.icon.as_ref()) {
         gtk::Image::from_gicon(icon)
     } else {
         gtk::Image::from_icon_name("grid-view-symbolic")
     };
-    image.set_pixel_size(24);
+    image.set_pixel_size(icon_size);
     image
 }
 
-fn item_visual(app: Option<&AppRecord>, launching: bool) -> gtk::Overlay {
+fn item_visual(app: Option<&AppRecord>, launching: bool, icon_size: i32) -> gtk::Overlay {
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&icon_widget(app)));
+    overlay.set_child(Some(&icon_widget(app, icon_size)));
 
     if launching {
         let spinner = gtk::Spinner::new();
