@@ -141,12 +141,40 @@ fn build_ui(app: &gtk::Application) {
     window.add_css_class("rudo-window");
 
     // Parse position and set up dock orientation
-    let (anchor_edge, transition_type, orientation, halign, valign, margin_edge) = 
+    let (anchor_edge, transition_type, orientation, halign, valign, margin_edge) =
         match position.as_str() {
-            "top" => (Edge::Top, gtk::RevealerTransitionType::SlideDown, gtk::Orientation::Vertical, gtk::Align::Center, gtk::Align::Start, Edge::Top),
-            "left" => (Edge::Left, gtk::RevealerTransitionType::SlideRight, gtk::Orientation::Horizontal, gtk::Align::Start, gtk::Align::Center, Edge::Left),
-            "right" => (Edge::Right, gtk::RevealerTransitionType::SlideLeft, gtk::Orientation::Horizontal, gtk::Align::End, gtk::Align::Center, Edge::Right),
-            _ => (Edge::Bottom, gtk::RevealerTransitionType::SlideUp, gtk::Orientation::Vertical, gtk::Align::Center, gtk::Align::End, Edge::Bottom),
+            "top" => (
+                Edge::Top,
+                gtk::RevealerTransitionType::SlideDown,
+                gtk::Orientation::Vertical,
+                gtk::Align::Center,
+                gtk::Align::Start,
+                Edge::Top,
+            ),
+            "left" => (
+                Edge::Left,
+                gtk::RevealerTransitionType::SlideRight,
+                gtk::Orientation::Horizontal,
+                gtk::Align::Start,
+                gtk::Align::Center,
+                Edge::Left,
+            ),
+            "right" => (
+                Edge::Right,
+                gtk::RevealerTransitionType::SlideLeft,
+                gtk::Orientation::Horizontal,
+                gtk::Align::End,
+                gtk::Align::Center,
+                Edge::Right,
+            ),
+            _ => (
+                Edge::Bottom,
+                gtk::RevealerTransitionType::SlideUp,
+                gtk::Orientation::Vertical,
+                gtk::Align::Center,
+                gtk::Align::End,
+                Edge::Bottom,
+            ),
         };
 
     if gtk4_layer_shell::is_supported() {
@@ -171,14 +199,22 @@ fn build_ui(app: &gtk::Application) {
         .build();
 
     let dock_surface = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
-        12
+        if orientation == gtk::Orientation::Vertical {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        },
+        12,
     );
     dock_surface.add_css_class("dock-surface");
 
     let items_box = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
-        10
+        if orientation == gtk::Orientation::Vertical {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        },
+        10,
     );
     items_box.set_valign(gtk::Align::Center);
 
@@ -215,8 +251,12 @@ fn build_ui(app: &gtk::Application) {
     outer.append(&dock_revealer);
 
     let hover_strip = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical { gtk::Orientation::Horizontal } else { gtk::Orientation::Vertical },
-        0
+        if orientation == gtk::Orientation::Vertical {
+            gtk::Orientation::Horizontal
+        } else {
+            gtk::Orientation::Vertical
+        },
+        0,
     );
     hover_strip.add_css_class("dock-hover-strip");
     hover_strip.set_halign(halign);
@@ -448,7 +488,11 @@ fn build_item_widget(
     }
     button.set_tooltip_text(Some(&item.tooltip));
     let icon_size = state.borrow().icon_size;
-    button.set_child(Some(&item_visual(item.app.as_ref(), item.launching, icon_size)));
+    button.set_child(Some(&item_visual(
+        item.app.as_ref(),
+        item.launching,
+        icon_size,
+    )));
 
     let indicator = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     indicator.add_css_class("dock-indicator");
