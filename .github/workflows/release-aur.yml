@@ -99,8 +99,8 @@ jobs:
 
       - name: Generate PKGBUILD dynamically
         run: |
-          source_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/v${PKGVER}.tar.gz"
-          sha256="$(curl -L "$source_url" | sha256sum | awk '{print $1}')"
+          binary_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${PKGVER}/rudo-${PKGVER}-x86_64-linux.tar.gz"
+          sha256="$(curl -L "$binary_url" | sha256sum | awk '{print $1}')"
 
           bash ./scripts/render-aur-package.sh aur-dist \
             "$PACKAGE_NAME" \

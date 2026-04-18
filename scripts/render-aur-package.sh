@@ -24,18 +24,11 @@ arch=('x86_64')
 url='https://github.com/${repo_owner}/${repo_name}'
 license=('unknown')
 depends=('gtk4' 'gtk4-layer-shell')
-makedepends=('cargo')
-source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/archive/refs/tags/v\${pkgver}.tar.gz")
+source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/releases/download/v\${pkgver}/\${pkgname}-\${pkgver}-x86_64-linux.tar.gz")
 sha256sums=('${sha256}')
 
-build() {
-    cd "${repo_name}-\${pkgver}"
-    cargo build --release --locked
-}
-
 package() {
-    cd "${repo_name}-\${pkgver}"
-    install -Dm755 target/release/rudo "\${pkgdir}/usr/bin/rudo"
-    install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md"
+    install -Dm755 rudo "\${pkgdir}/usr/bin/rudo"
+    install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md" 2>/dev/null || true
 }
 EOF
