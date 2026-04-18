@@ -45,6 +45,16 @@ Or:
 just run
 ```
 
+## Install
+### From AUR (Arch Linux)
+For Arch Linux users, `rudo` is available in the AUR as `rudo-bin`:
+```bash
+yay -S rudo-bin
+# or
+paru -S rudo-bin
+```
+This installs the pre-built binary. No compilation needed.
+
 ## Configuration
 
 `rudo` stores its user files in `~/.config/rudo/`.
