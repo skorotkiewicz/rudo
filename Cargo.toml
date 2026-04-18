@@ -1,6 +1,6 @@
 [package]
 name = "rudo"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 
 [dependencies]
@@ -9,5 +9,6 @@ gtk4 = "0.11.2"
 gtk4-layer-shell = "0.8.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+thiserror = "2.0.12"
 wayland-client = "0.31.14"
 wayland-protocols-wlr = { version = "0.3.9", features = ["client"] }

@@ -181,6 +181,7 @@ impl Dispatch<WlCallback, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // Callback events are handled by the event queue; no action needed
     }
 }
 
@@ -193,6 +194,7 @@ impl Dispatch<WlSeat, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // Seat capabilities not used directly; stored in ControlState via registry
     }
 }
 
@@ -205,6 +207,7 @@ impl Dispatch<WlOutput, ()> for WaylandState {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // Output events not used by this dock implementation
     }
 }
 

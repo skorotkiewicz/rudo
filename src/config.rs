@@ -2,6 +2,17 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("config directory not found")]
+    ConfigDirNotFound,
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PinStore {
@@ -66,9 +77,9 @@ pub fn save_pins(pins: &[String]) {
     }
 }
 
-fn save_pins_inner(pins: &[String]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn save_pins_inner(pins: &[String]) -> Result<(), ConfigError> {
     let Some(path) = pins_path() else {
-        return Ok(());
+        return Err(ConfigError::ConfigDirNotFound);
     };
 
     if let Some(parent) = path.parent() {
@@ -111,9 +122,9 @@ pub fn load_style_css() -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-fn ensure_style_css_inner() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn ensure_style_css_inner() -> Result<(), ConfigError> {
     let Some(path) = style_path() else {
-        return Ok(());
+        return Err(ConfigError::ConfigDirNotFound);
     };
 
     if path.exists() {
@@ -128,9 +139,9 @@ fn ensure_style_css_inner() -> Result<(), Box<dyn std::error::Error + Send + Syn
     Ok(())
 }
 
-fn ensure_settings_inner() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn ensure_settings_inner() -> Result<(), ConfigError> {
     let Some(path) = settings_path() else {
-        return Ok(());
+        return Err(ConfigError::ConfigDirNotFound);
     };
 
     if path.exists() {

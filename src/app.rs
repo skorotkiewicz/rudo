@@ -96,6 +96,63 @@ struct ConfigWatchState {
     settings: config::Settings,
 }
 
+/// Dock layout configuration based on screen position
+struct DockLayout {
+    anchor_edge: Edge,
+    margin_edge: Edge,
+    transition_type: gtk::RevealerTransitionType,
+    orientation: gtk::Orientation,
+    halign: gtk::Align,
+    valign: gtk::Align,
+}
+
+impl DockLayout {
+    fn from_position(position: &str) -> Self {
+        match position {
+            "top" => Self {
+                anchor_edge: Edge::Top,
+                margin_edge: Edge::Top,
+                transition_type: gtk::RevealerTransitionType::SlideDown,
+                orientation: gtk::Orientation::Vertical,
+                halign: gtk::Align::Center,
+                valign: gtk::Align::Start,
+            },
+            "left" => Self {
+                anchor_edge: Edge::Left,
+                margin_edge: Edge::Left,
+                transition_type: gtk::RevealerTransitionType::SlideRight,
+                orientation: gtk::Orientation::Horizontal,
+                halign: gtk::Align::Start,
+                valign: gtk::Align::Center,
+            },
+            "right" => Self {
+                anchor_edge: Edge::Right,
+                margin_edge: Edge::Right,
+                transition_type: gtk::RevealerTransitionType::SlideLeft,
+                orientation: gtk::Orientation::Horizontal,
+                halign: gtk::Align::End,
+                valign: gtk::Align::Center,
+            },
+            _ => Self {
+                anchor_edge: Edge::Bottom,
+                margin_edge: Edge::Bottom,
+                transition_type: gtk::RevealerTransitionType::SlideUp,
+                orientation: gtk::Orientation::Vertical,
+                halign: gtk::Align::Center,
+                valign: gtk::Align::End,
+            },
+        }
+    }
+
+    fn items_orientation(&self) -> gtk::Orientation {
+        match self.orientation {
+            gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
+            gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl ConfigWatchState {
     fn new(settings: config::Settings) -> Self {
         Self {
@@ -140,82 +197,33 @@ fn build_ui(app: &gtk::Application) {
         .build();
     window.add_css_class("rudo-window");
 
-    // Parse position and set up dock orientation
-    let (anchor_edge, transition_type, orientation, halign, valign, margin_edge) =
-        match position.as_str() {
-            "top" => (
-                Edge::Top,
-                gtk::RevealerTransitionType::SlideDown,
-                gtk::Orientation::Vertical,
-                gtk::Align::Center,
-                gtk::Align::Start,
-                Edge::Top,
-            ),
-            "left" => (
-                Edge::Left,
-                gtk::RevealerTransitionType::SlideRight,
-                gtk::Orientation::Horizontal,
-                gtk::Align::Start,
-                gtk::Align::Center,
-                Edge::Left,
-            ),
-            "right" => (
-                Edge::Right,
-                gtk::RevealerTransitionType::SlideLeft,
-                gtk::Orientation::Horizontal,
-                gtk::Align::End,
-                gtk::Align::Center,
-                Edge::Right,
-            ),
-            _ => (
-                Edge::Bottom,
-                gtk::RevealerTransitionType::SlideUp,
-                gtk::Orientation::Vertical,
-                gtk::Align::Center,
-                gtk::Align::End,
-                Edge::Bottom,
-            ),
-        };
+    let layout = DockLayout::from_position(&position);
 
     if gtk4_layer_shell::is_supported() {
         window.init_layer_shell();
         window.set_namespace(Some("rudo-dock"));
         window.set_layer(Layer::Top);
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_anchor(anchor_edge, true);
-        window.set_margin(margin_edge, 6);
+        window.set_anchor(layout.anchor_edge, true);
+        window.set_margin(layout.margin_edge, 6);
     } else {
         window.set_decorated(false);
     }
 
-    let outer = gtk::Box::new(orientation, 0);
-    outer.set_halign(halign);
-    outer.set_valign(valign);
+    let outer = gtk::Box::new(layout.orientation, 0);
+    outer.set_halign(layout.halign);
+    outer.set_valign(layout.valign);
 
     let dock_revealer = gtk::Revealer::builder()
-        .transition_type(transition_type)
+        .transition_type(layout.transition_type)
         .transition_duration(settings.animation_duration_ms)
         .reveal_child(true)
         .build();
 
-    let dock_surface = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical {
-            gtk::Orientation::Horizontal
-        } else {
-            gtk::Orientation::Vertical
-        },
-        12,
-    );
+    let dock_surface = gtk::Box::new(layout.items_orientation(), 12);
     dock_surface.add_css_class("dock-surface");
 
-    let items_box = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical {
-            gtk::Orientation::Horizontal
-        } else {
-            gtk::Orientation::Vertical
-        },
-        10,
-    );
+    let items_box = gtk::Box::new(layout.items_orientation(), 10);
     items_box.set_valign(gtk::Align::Center);
 
     let picker_button = gtk::Button::new();
@@ -250,17 +258,10 @@ fn build_ui(app: &gtk::Application) {
     dock_revealer.set_child(Some(&dock_surface));
     outer.append(&dock_revealer);
 
-    let hover_strip = gtk::Box::new(
-        if orientation == gtk::Orientation::Vertical {
-            gtk::Orientation::Horizontal
-        } else {
-            gtk::Orientation::Vertical
-        },
-        0,
-    );
+    let hover_strip = gtk::Box::new(layout.items_orientation(), 0);
     hover_strip.add_css_class("dock-hover-strip");
-    hover_strip.set_halign(halign);
-    hover_strip.set_valign(valign);
+    hover_strip.set_halign(layout.halign);
+    hover_strip.set_valign(layout.valign);
     hover_strip.set_hexpand(true);
     hover_strip.set_visible(autohide_enabled);
     outer.append(&hover_strip);
@@ -1170,15 +1171,10 @@ fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
 
 fn window_menu_label(window: &WindowState, multiple: bool) -> String {
     let title = window.title.as_deref().unwrap_or("Untitled Window");
+    let active_suffix = if window.active { " (active)" } else { "" };
 
-    if multiple {
-        if window.active {
-            format!("Focus {title} (active)")
-        } else {
-            format!("Focus {title}")
-        }
-    } else if window.active {
-        format!("Focus {title} (active)")
+    if multiple || window.active {
+        format!("Focus {title}{active_suffix}")
     } else {
         "Focus Window".to_string()
     }

@@ -658,13 +658,14 @@ dependencies = [
 
 [[package]]
 name = "rudo"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "dirs",
  "gtk4",
  "gtk4-layer-shell",
  "serde",
  "serde_json",
+ "thiserror",
  "wayland-client",
  "wayland-protocols-wlr",
 ]
