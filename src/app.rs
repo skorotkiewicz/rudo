@@ -223,6 +223,7 @@ fn build_ui(app: &gtk::Application) {
         Duration::from_secs(settings.autohide.delay_secs.max(1)),
     )));
     apply_autohide_settings(&window, &hover_strip, &autohide, &settings);
+    install_autohide_hover(&picker_popover, &autohide);
     let config_watch = Rc::new(RefCell::new(ConfigWatchState::new(settings.clone())));
 
     {
