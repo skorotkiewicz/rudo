@@ -60,7 +60,8 @@ Default `settings.json`:
   "autohide": {
     "enabled": true,
     "delay_secs": 3
-  }
+  },
+  "show_pin_button": true
 }
 ```
 

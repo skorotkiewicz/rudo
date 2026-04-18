@@ -8,10 +8,11 @@ struct PinStore {
     pins: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub autohide: AutoHideSettings,
+    pub show_pin_button: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +27,15 @@ impl Default for AutoHideSettings {
         Self {
             enabled: true,
             delay_secs: 3,
+        }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            autohide: AutoHideSettings::default(),
+            show_pin_button: true,
         }
     }
 }

@@ -111,6 +111,7 @@ fn build_ui(app: &gtk::Application) {
     config::ensure_settings();
     let settings = config::load_settings();
     let autohide_enabled = settings.autohide.enabled;
+    let show_pin_button = settings.show_pin_button;
 
     let catalog = AppCatalog::load();
     let pins = sanitize_pins(&catalog, config::load_pins());
@@ -169,6 +170,7 @@ fn build_ui(app: &gtk::Application) {
     picker_button.add_css_class("picker-button");
     picker_button.set_tooltip_text(Some("Pin an application"));
     picker_button.set_child(Some(&icon_widget(None)));
+    picker_button.set_visible(show_pin_button);
 
     let picker_popover = gtk::Popover::new();
     picker_popover.set_has_arrow(false);
@@ -266,6 +268,7 @@ fn build_ui(app: &gtk::Application) {
         let autohide = Rc::clone(&autohide);
         let config_watch = Rc::clone(&config_watch);
         let items_box = items_box.clone();
+        let picker_button = picker_button.clone();
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
         let hover_strip = hover_strip.clone();
@@ -312,6 +315,7 @@ fn build_ui(app: &gtk::Application) {
             }
 
             if let Some(new_settings) = settings_to_apply {
+                picker_button.set_visible(new_settings.show_pin_button);
                 apply_autohide_settings(&window, &hover_strip, &autohide, &new_settings);
                 rerender = true;
             }
