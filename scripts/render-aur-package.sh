@@ -24,11 +24,11 @@ arch=('x86_64')
 url='https://github.com/${repo_owner}/${repo_name}'
 license=('unknown')
 depends=('gtk4' 'gtk4-layer-shell')
-source=("\${pkgname}-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/releases/download/v\${pkgver}/\${pkgname}-\${pkgver}-x86_64-linux.tar.gz")
+source=("\${repo_name}-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/releases/download/v\${pkgver}/\${repo_name}-\${pkgver}-x86_64-linux.tar.gz")
 sha256sums=('${sha256}')
 
 package() {
     install -Dm755 rudo "\${pkgdir}/usr/bin/rudo"
-    install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md" 2>/dev/null || true
+    install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${repo_name}/README.md" 2>/dev/null || true
 }
 EOF
