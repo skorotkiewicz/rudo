@@ -24,7 +24,7 @@ arch=('x86_64')
 url='https://github.com/${repo_owner}/${repo_name}'
 license=('unknown')
 depends=('gtk4' 'gtk4-layer-shell')
-source=("\${repo_name}-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/releases/download/v\${pkgver}/\${repo_name}-\${pkgver}-x86_64-linux.tar.gz")
+source=("rudo-\${pkgver}.tar.gz::https://github.com/${repo_owner}/${repo_name}/releases/download/v\${pkgver}/rudo-\${pkgver}-x86_64-linux.tar.gz")
 sha256sums=('${sha256}')
 
 package() {
