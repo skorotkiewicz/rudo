@@ -108,6 +108,9 @@ Default `settings.json`:
 - **icon_size**: Size in pixels (default: 24)
 - **animation_duration_ms**: Show/hide animation in milliseconds (default: 220)
 
+<details>
+  <summary>Menu System</summary>
+
 ### Menu System
 
 Configure a power menu or custom actions via the `menu` section:
@@ -118,15 +121,21 @@ Configure a power menu or custom actions via the `menu` section:
 - **items**: Array of menu items with `label`, `command`, optional `icon`, and `confirm` flag
 
 Set `confirm: true` to show a confirmation dialog before executing destructive commands.
+</details>
 
 <details>
-  <summary>Details</summary>
+  <summary>Output-Based Window Grouping</summary>
 
 ### Output-Based Window Grouping
 
 When `group_by_output: true`, windows are grouped by the monitor they're displayed on, and sorted by their spatial coordinates (top-to-bottom, left-to-right). This helps organize docks in multi-monitor setups.
 
 **Note**: This feature requires compositor support for providing output information and window coordinates via the `wlr-foreign-toplevel-management` protocol. Currently most compositors don't provide this data.
+
+</details>
+
+<details>
+  <summary>Badge Notifications</summary>
 
 ### Badge Notifications
 
