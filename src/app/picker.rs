@@ -13,7 +13,7 @@ pub(crate) fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::B
     clear_children(picker_list);
 
     let borrow = state.borrow();
-    let exclude = borrow.pins.iter().cloned().collect::<HashSet<_>>();
+    let exclude: HashSet<&str> = borrow.pins.iter().map(|s| s.as_str()).collect();
     let matches = borrow.catalog.search(query, 40, &exclude);
     drop(borrow);
 

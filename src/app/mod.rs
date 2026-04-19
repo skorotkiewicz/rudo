@@ -49,7 +49,9 @@ pub(crate) struct DockState {
     pub(crate) backend: Option<BackendController>,
     pub(crate) launching: HashMap<String, Instant>,
     pub(crate) icon_size: i32,
-    last_rendered_items: Vec<(String, bool, u32)>,
+    last_pins: Vec<String>,
+    last_windows: Vec<WindowState>,
+    last_launching_keys: Vec<String>,
 }
 
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(6);
@@ -69,40 +71,39 @@ impl DockState {
     }
 
     pub(crate) fn reconcile_launching(&mut self) {
-        let opened_apps = self
+        let opened_apps: HashSet<String> = self
             .windows
             .iter()
-            .filter_map(|window| self.catalog.resolve(window.app_id.as_deref()))
-            .map(|app| app.id)
-            .collect::<HashSet<_>>();
+            .filter_map(|window| {
+                window
+                    .app_id
+                    .as_deref()
+                    .and_then(|id| self.catalog.resolve_id(id))
+            })
+            .collect();
 
         self.launching
             .retain(|app_id, _| !opened_apps.contains(app_id.as_str()));
     }
 
     fn needs_render(&mut self) -> bool {
-        let capacity = self.pins.len() + self.windows.len() + self.launching.len();
-        let mut sig = Vec::with_capacity(capacity);
-        sig.extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
-        sig.extend(self.windows.iter().map(|w| {
-            (
-                format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or("")),
-                w.active,
-                w.badge_count.unwrap_or(0),
-            )
-        }));
-        sig.extend(
-            self.launching
-                .keys()
-                .map(|id| (format!("launch:{id}"), false, 0)),
-        );
+        let launching_keys = {
+            let mut keys: Vec<String> = self.launching.keys().cloned().collect();
+            keys.sort();
+            keys
+        };
 
-        if sig != self.last_rendered_items {
-            self.last_rendered_items = sig;
-            true
-        } else {
-            false
+        let changed = self.pins != self.last_pins
+            || self.windows != self.last_windows
+            || launching_keys != self.last_launching_keys;
+
+        if changed {
+            self.last_pins.clone_from(&self.pins);
+            self.last_windows.clone_from(&self.windows);
+            self.last_launching_keys = launching_keys;
         }
+
+        changed
     }
 }
 
@@ -112,6 +113,7 @@ pub(crate) struct RenderContext {
     pub(crate) items_box: gtk::Box,
     pub(crate) picker_search: gtk::SearchEntry,
     pub(crate) picker_list: gtk::Box,
+    pub(crate) picker_popover: gtk::Popover,
     pub(crate) autohide: Rc<RefCell<autohide::AutoHideState>>,
 }
 
@@ -137,7 +139,9 @@ fn build_ui(app: &gtk::Application) {
         backend,
         launching: HashMap::new(),
         icon_size: settings.icon_size,
-        last_rendered_items: Vec::new(),
+        last_pins: Vec::new(),
+        last_windows: Vec::new(),
+        last_launching_keys: Vec::new(),
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -253,6 +257,7 @@ fn build_ui(app: &gtk::Application) {
         items_box: items_box.clone(),
         picker_search: picker_search.clone(),
         picker_list: picker_list.clone(),
+        picker_popover: picker_popover.clone(),
         autohide: Rc::clone(&autohide),
     };
 
@@ -392,19 +397,18 @@ fn build_ui(app: &gtk::Application) {
 }
 
 fn render_dock(ctx: &RenderContext) {
-    if !ctx.state.borrow_mut().needs_render() {
-        return;
-    }
-
-    clear_children(&ctx.items_box);
-
     let (pinned_items, running_items) = {
         let mut dock_state = ctx.state.borrow_mut();
         dock_state.prune_launching();
         dock_state.reconcile_launching();
+        if !dock_state.needs_render() {
+            return;
+        }
         collect_items(&dock_state)
     };
     let show_separator = !pinned_items.is_empty() && !running_items.is_empty();
+
+    clear_children(&ctx.items_box);
 
     for item in &pinned_items {
         ctx.items_box.append(&item::build_item_widget(ctx, item));
@@ -428,11 +432,13 @@ fn render_dock(ctx: &RenderContext) {
         ctx.items_box.append(&item::build_item_widget(ctx, item));
     }
 
-    picker::render_picker(
-        &ctx.state,
-        &ctx.picker_list,
-        ctx.picker_search.text().as_ref(),
-    );
+    if ctx.picker_popover.is_visible() {
+        picker::render_picker(
+            &ctx.state,
+            &ctx.picker_list,
+            ctx.picker_search.text().as_ref(),
+        );
+    }
 }
 
 fn clear_children(widget: &gtk::Box) {
@@ -480,25 +486,23 @@ fn group_windows(
     BTreeMap<String, Vec<WindowState>>,
     BTreeMap<String, Vec<WindowState>>,
 ) {
-    let mut known = BTreeMap::new();
-    let mut unknown = BTreeMap::new();
+    let mut known: BTreeMap<String, Vec<WindowState>> = BTreeMap::new();
+    let mut unknown: BTreeMap<String, Vec<WindowState>> = BTreeMap::new();
 
     for window in windows {
-        if let Some(app) = catalog.resolve(window.app_id.as_deref()) {
-            known
-                .entry(app.id)
-                .or_insert_with(Vec::new)
-                .push(window.clone());
+        if let Some(canonical) = window
+            .app_id
+            .as_deref()
+            .and_then(|id| catalog.resolve_id(id))
+        {
+            known.entry(canonical).or_default().push(window.clone());
         } else {
             let key = window
                 .app_id
                 .clone()
                 .or_else(|| window.title.clone())
                 .unwrap_or_else(|| window.id.clone());
-            unknown
-                .entry(key)
-                .or_insert_with(Vec::new)
-                .push(window.clone());
+            unknown.entry(key).or_default().push(window.clone());
         }
     }
 
@@ -619,9 +623,8 @@ fn aggregate_badges(windows: &[WindowState]) -> Option<u32> {
 fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     pins.into_iter()
-        .filter_map(|id| catalog.app(&id))
-        .filter(|app| seen.insert(app.id.clone()))
-        .map(|app| app.id)
+        .filter_map(|id| catalog.resolve_id(&id))
+        .filter(|id| seen.insert(id.clone()))
         .collect()
 }
 

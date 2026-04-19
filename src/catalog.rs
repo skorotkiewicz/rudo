@@ -94,24 +94,12 @@ impl AppCatalog {
         self.apps.get(&canonical).cloned()
     }
 
-    pub fn resolve(&self, raw_app_id: Option<&str>) -> Option<AppRecord> {
-        let raw = raw_app_id?;
-        let canonical = self.resolve_id(raw)?;
-        self.apps.get(&canonical).cloned()
-    }
-
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-        exclude_ids: &HashSet<String>,
-    ) -> Vec<AppRecord> {
-        // Fast path: empty query returns all apps (used by picker)
+    pub fn search(&self, query: &str, limit: usize, exclude_ids: &HashSet<&str>) -> Vec<AppRecord> {
         if query.is_empty() {
             return self
                 .ordered_ids
                 .iter()
-                .filter(|id| !exclude_ids.contains(*id))
+                .filter(|id| !exclude_ids.contains(id.as_str()))
                 .filter_map(|id| self.apps.get(id))
                 .take(limit)
                 .cloned()
@@ -122,7 +110,7 @@ impl AppCatalog {
         let mut results: Vec<(MatchQuality, AppRecord)> = Vec::new();
 
         for id in &self.ordered_ids {
-            if exclude_ids.contains(id) {
+            if exclude_ids.contains(id.as_str()) {
                 continue;
             }
 
@@ -130,7 +118,6 @@ impl AppCatalog {
                 continue;
             };
 
-            // Determine match quality using pre-normalized search keys
             let quality = app.search_keys.iter().find_map(|key| {
                 if key == &normalized_query {
                     Some(MatchQuality::Exact)
@@ -148,7 +135,6 @@ impl AppCatalog {
             }
         }
 
-        // Sort by match quality (lower ordinal = better match)
         results.sort_by_key(|(q, _)| *q);
         results
             .into_iter()
@@ -157,7 +143,7 @@ impl AppCatalog {
             .collect()
     }
 
-    fn resolve_id(&self, raw: &str) -> Option<String> {
+    pub fn resolve_id(&self, raw: &str) -> Option<String> {
         if self.apps.contains_key(raw) {
             return Some(raw.to_string());
         }
