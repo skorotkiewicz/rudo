@@ -119,6 +119,9 @@ Configure a power menu or custom actions via the `menu` section:
 
 Set `confirm: true` to show a confirmation dialog before executing destructive commands.
 
+<details>
+  <summary>Details</summary>
+
 ### Output-Based Window Grouping
 
 When `group_by_output: true`, windows are grouped by the monitor they're displayed on, and sorted by their spatial coordinates (top-to-bottom, left-to-right). This helps organize docks in multi-monitor setups.
@@ -134,6 +137,8 @@ When supported by your compositor, rudo displays unread notification counts (bad
 - Red badge with white text for visibility
 
 `style.css` is loaded on every start after the built-in theme, so you can override the dock without rebuilding.
+
+</details>
 
 ## Development
 
