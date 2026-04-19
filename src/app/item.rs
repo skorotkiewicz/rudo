@@ -131,7 +131,6 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     wrapper
 }
 
-#[allow(clippy::too_many_lines)]
 pub(crate) fn build_context_menu(
     state: Rc<RefCell<DockState>>,
     parent: &impl gtk::prelude::IsA<gtk::Widget>,
