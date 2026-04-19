@@ -24,7 +24,8 @@ A small, elegant dock for Wayland.
 - `niri`: best experience, using `NIRI_SOCKET` integration
 - Other Wayland compositors: works through `wlr-foreign-toplevel-management` when available
 
-**Feature Availability by Backend:**
+<details>
+  <summary>Feature Availability by Backend</summary>
 
 | Feature | niri | wlr-foreign-toplevel |
 |---------|------|---------------------|
@@ -34,6 +35,8 @@ A small, elegant dock for Wayland.
 | Output grouping | ❌ Not yet | ⚠️ Limited* |
 
 \* Badge notifications and output grouping depend on compositor-specific protocol extensions. Most compositors don't currently provide badge counts or window coordinates through the standard protocol.
+
+</details>
 
 ## Build
 
@@ -111,8 +114,6 @@ Default `settings.json`:
 <details>
   <summary>Menu System</summary>
 
-### Menu System
-
 Configure a power menu or custom actions via the `menu` section:
 
 - **enabled**: Show/hide the menu button
@@ -126,8 +127,6 @@ Set `confirm: true` to show a confirmation dialog before executing destructive c
 <details>
   <summary>Output-Based Window Grouping</summary>
 
-### Output-Based Window Grouping
-
 When `group_by_output: true`, windows are grouped by the monitor they're displayed on, and sorted by their spatial coordinates (top-to-bottom, left-to-right). This helps organize docks in multi-monitor setups.
 
 **Note**: This feature requires compositor support for providing output information and window coordinates via the `wlr-foreign-toplevel-management` protocol. Currently most compositors don't provide this data.
@@ -136,8 +135,6 @@ When `group_by_output: true`, windows are grouped by the monitor they're display
 
 <details>
   <summary>Badge Notifications</summary>
-
-### Badge Notifications
 
 When supported by your compositor, rudo displays unread notification counts (badges) on dock items from apps like Discord, Telegram, etc. Badge counts are aggregated across all windows of the same app.
 
