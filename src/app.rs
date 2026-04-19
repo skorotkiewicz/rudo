@@ -33,6 +33,7 @@ struct DockItem {
     pinned: bool,
     active: bool,
     launching: bool,
+    badge_count: Option<u32>,
 }
 
 struct DockState {
@@ -81,13 +82,14 @@ impl DockState {
             sig.push(format!("pin:{pin}"));
         }
 
-        // Add windows with their active state
+        // Add windows with their active state and badge count
         for window in &self.windows {
             let key = format!(
-                "{}:{}:{}",
+                "{}:{}:{}:{}",
                 window.id,
                 window.app_id.as_deref().unwrap_or(""),
-                if window.active { "active" } else { "inactive" }
+                if window.active { "active" } else { "inactive" },
+                window.badge_count.unwrap_or(0)
             );
             sig.push(key);
         }
@@ -375,11 +377,21 @@ fn build_ui(app: &gtk::Application) {
         glib::timeout_add_local(Duration::from_millis(80), move || {
             let mut changed = false;
             while let Ok(event) = backend_rx.try_recv() {
-                let BackendEvent::Snapshot(snapshot) = event;
-                let mut dock_state = state.borrow_mut();
-                dock_state.windows = snapshot;
-                dock_state.reconcile_launching();
-                changed = true;
+                match event {
+                    BackendEvent::Snapshot(snapshot) => {
+                        let mut dock_state = state.borrow_mut();
+                        dock_state.windows = snapshot;
+                        dock_state.reconcile_launching();
+                        changed = true;
+                    }
+                    BackendEvent::BadgeUpdate { id, count } => {
+                        let mut dock_state = state.borrow_mut();
+                        if let Some(window) = dock_state.windows.iter_mut().find(|w| w.id == id) {
+                            window.badge_count = count;
+                            changed = true;
+                        }
+                    }
+                }
             }
 
             if changed {
@@ -669,7 +681,14 @@ fn build_item_widget(
         button.add_controller(middle);
     }
 
-    wrapper.append(&button);
+    // Wrap button in overlay to support badge
+    let button_overlay = gtk::Overlay::new();
+    button_overlay.set_child(Some(&button));
+    if let Some(badge) = badge_widget(item.badge_count) {
+        button_overlay.add_overlay(&badge);
+    }
+
+    wrapper.append(&button_overlay);
     wrapper.append(&indicator);
 
     if item.pinned
@@ -939,6 +958,7 @@ fn build_known_item(
 ) -> DockItem {
     let active = windows.iter().any(|window| window.active);
     let tooltip = tooltip_for(&app.name, &windows, launching);
+    let badge_count = aggregate_badges(&windows);
     DockItem {
         label: app.name.clone(),
         tooltip,
@@ -947,12 +967,14 @@ fn build_known_item(
         pinned,
         active,
         launching,
+        badge_count,
     }
 }
 
 fn build_unknown_item(label: String, windows: Vec<WindowState>) -> DockItem {
     let active = windows.iter().any(|window| window.active);
     let tooltip = tooltip_for(&label, &windows, false);
+    let badge_count = aggregate_badges(&windows);
     DockItem {
         label,
         tooltip,
@@ -961,6 +983,7 @@ fn build_unknown_item(label: String, windows: Vec<WindowState>) -> DockItem {
         pinned: false,
         active,
         launching: false,
+        badge_count,
     }
 }
 
@@ -974,6 +997,13 @@ fn tooltip_for(label: &str, windows: &[WindowState], launching: bool) -> String 
         }
         count => format!("{label}\n{count} windows"),
     }
+}
+
+/// Aggregate badge counts across all windows of an app.
+/// Returns None if no badges, Some(total) if at least one window has a badge.
+fn aggregate_badges(windows: &[WindowState]) -> Option<u32> {
+    let total: u32 = windows.iter().filter_map(|w| w.badge_count).sum();
+    if total > 0 { Some(total) } else { None }
 }
 
 fn icon_widget(app: Option<&AppRecord>, icon_size: i32) -> gtk::Image {
@@ -1003,6 +1033,33 @@ fn item_visual(app: Option<&AppRecord>, launching: bool, icon_size: i32) -> gtk:
     }
 
     overlay
+}
+
+/// Build a badge overlay widget showing notification count.
+/// Returns None if count is None or zero (badge should be hidden).
+fn badge_widget(count: Option<u32>) -> Option<gtk::Box> {
+    let count = count?;
+    if count == 0 {
+        return None;
+    }
+
+    let badge = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    badge.add_css_class("dock-badge");
+    badge.set_halign(gtk::Align::End);
+    badge.set_valign(gtk::Align::Start);
+
+    // Format the badge text
+    let label_text = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+
+    let label = gtk::Label::new(Some(&label_text));
+    label.add_css_class("dock-badge-label");
+    badge.append(&label);
+
+    Some(badge)
 }
 
 fn clear_children(widget: &gtk::Box) {
@@ -1358,6 +1415,23 @@ const CSS: &str = r#"
 
 .launch-spinner {
     color: #ffd166;
+}
+
+.dock-badge {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #ff4444, #ff2222);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.42);
+    margin-top: -2px;
+    margin-end: -2px;
+}
+
+.dock-badge-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
 }
 
 .dock-separator {
