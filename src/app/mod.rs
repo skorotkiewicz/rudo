@@ -485,12 +485,18 @@ fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
     }
 }
 
-fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
+fn group_windows(
+    windows: &[WindowState],
+    catalog: &AppCatalog,
+) -> (
+    BTreeMap<String, Vec<WindowState>>,
+    BTreeMap<String, Vec<WindowState>>,
+) {
     let mut known = BTreeMap::<String, Vec<WindowState>>::new();
     let mut unknown = BTreeMap::<String, Vec<WindowState>>::new();
 
-    for window in &state.windows {
-        if let Some(app) = state.catalog.resolve(window.app_id.as_deref()) {
+    for window in windows {
+        if let Some(app) = catalog.resolve(window.app_id.as_deref()) {
             known.entry(app.id).or_default().push(window.clone());
         } else {
             let key = window
@@ -502,7 +508,14 @@ fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
         }
     }
 
-    let pinned = state
+    (known, unknown)
+}
+
+fn build_pinned_items(
+    state: &DockState,
+    known: &mut BTreeMap<String, Vec<WindowState>>,
+) -> Vec<DockItem> {
+    state
         .pins
         .iter()
         .filter_map(|id| {
@@ -511,9 +524,14 @@ fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
             let launching = state.is_launching(&app.id);
             Some(build_known_item(app, windows, true, launching))
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let mut running = known
+fn build_running_items(
+    known: BTreeMap<String, Vec<WindowState>>,
+    state: &DockState,
+) -> Vec<DockItem> {
+    let mut items = known
         .into_iter()
         .filter_map(|(id, windows)| {
             let app = state.catalog.app(&id)?;
@@ -521,80 +539,52 @@ fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
             Some(build_known_item(app, windows, false, launching))
         })
         .collect::<Vec<_>>();
+    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+    items
+}
 
-    running.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
-
-    let mut unknown_items = unknown
+fn build_unknown_items(unknown: BTreeMap<String, Vec<WindowState>>) -> Vec<DockItem> {
+    let mut items = unknown
         .into_iter()
         .map(|(label, windows)| build_unknown_item(label, windows))
         .collect::<Vec<_>>();
-    unknown_items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+    items
+}
 
-    running.extend(unknown_items);
+fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
+    let (mut known, unknown) = group_windows(&state.windows, &state.catalog);
+    let pinned = build_pinned_items(state, &mut known);
+    let mut running = build_running_items(known, state);
+    running.extend(build_unknown_items(unknown));
     (pinned, running)
 }
 
 fn collect_items_by_output(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
-    type OutputGroup = (
-        BTreeMap<String, Vec<WindowState>>,
-        BTreeMap<String, Vec<WindowState>>,
-    );
-
-    let mut by_output: BTreeMap<Option<u32>, OutputGroup> = BTreeMap::new();
-
+    let mut by_output: BTreeMap<Option<u32>, Vec<WindowState>> = BTreeMap::new();
     for window in &state.windows {
-        let output_id = window.output_id;
-        let entry = by_output.entry(output_id).or_default();
+        by_output
+            .entry(window.output_id)
+            .or_default()
+            .push(window.clone());
+    }
 
-        if let Some(app) = state.catalog.resolve(window.app_id.as_deref()) {
-            entry.0.entry(app.id).or_default().push(window.clone());
-        } else {
-            let key = window
-                .app_id
-                .clone()
-                .or_else(|| window.title.clone())
-                .unwrap_or_else(|| window.id.clone());
-            entry.1.entry(key).or_default().push(window.clone());
+    let mut global_known = BTreeMap::<String, Vec<WindowState>>::new();
+    for windows in by_output.values() {
+        let (known, _) = group_windows(windows, &state.catalog);
+        for (id, wins) in known {
+            global_known.entry(id).or_default().extend(wins);
         }
     }
 
-    let pinned = state
-        .pins
-        .iter()
-        .filter_map(|id| {
-            let app = state.catalog.app(id)?;
-            let windows: Vec<WindowState> = by_output
-                .values()
-                .flat_map(|(known, _)| known.get(id).cloned().unwrap_or_default())
-                .collect();
-            let launching = state.is_launching(&app.id);
-            Some(build_known_item(app, windows, true, launching))
-        })
-        .collect::<Vec<_>>();
-
+    let pinned = build_pinned_items(state, &mut global_known);
     let mut running = Vec::new();
 
-    for (_output_id, (known, unknown)) in by_output {
-        let mut output_items: Vec<DockItem> = known
-            .into_iter()
-            .filter_map(|(id, windows)| {
-                let app = state.catalog.app(&id)?;
-                let launching = state.is_launching(&app.id);
-                Some(build_known_item(app, windows, false, launching))
-            })
-            .collect();
-
-        let mut unknown_items: Vec<DockItem> = unknown
-            .into_iter()
-            .map(|(label, windows)| build_unknown_item(label, windows))
-            .collect();
-
-        let sort_key = |item: &DockItem| (!item.active, item.label.to_lowercase());
-        output_items.sort_by_cached_key(sort_key);
-        unknown_items.sort_by_cached_key(sort_key);
-
+    for (_output_id, windows) in by_output {
+        let (known, unknown) = group_windows(&windows, &state.catalog);
+        let mut output_items = build_running_items(known, state);
+        output_items.extend(build_unknown_items(unknown));
         running.extend(output_items);
-        running.extend(unknown_items);
     }
 
     (pinned, running)

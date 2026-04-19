@@ -8,6 +8,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use super::{BackendController, controller_channel};
 use crate::model::{BackendEvent, BackendRequest, WindowState};
@@ -150,10 +151,15 @@ fn publish_snapshot(event_tx: &Sender<BackendEvent>, windows: &BTreeMap<u64, Win
     let _ = event_tx.send(BackendEvent::Snapshot(snapshot));
 }
 
-fn write_json_line<T: Serialize>(
-    stream: &mut UnixStream,
-    value: &T,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[derive(Debug, Error)]
+enum NiriError {
+    #[error("Failed to connect to Niri socket: {0}")]
+    Connection(#[from] std::io::Error),
+    #[error("Failed to serialize request: {0}")]
+    Serialization(#[from] serde_json::Error),
+}
+
+fn write_json_line<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<(), NiriError> {
     serde_json::to_writer(&mut *stream, value)?;
     stream.write_all(b"\n")?;
     stream.flush()?;
