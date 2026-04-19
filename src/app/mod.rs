@@ -2,12 +2,13 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use gtk::glib::{self, ControlFlow};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::backend::{self, BackendController};
 use crate::catalog::{AppCatalog, AppRecord};
@@ -263,7 +264,63 @@ fn build_ui(app: &gtk::Application) {
         autohide::install_hover(&menu.popover, &autohide);
     }
 
-    let config_watch = Rc::new(RefCell::new(ConfigWatchState::new(settings.clone())));
+    let (config_tx, config_rx) = mpsc::channel();
+    let config_watch = ConfigWatchState::new(config_tx);
+    std::mem::forget(config_watch);
+
+    {
+        let ctx = ctx.clone();
+        let window = window.clone();
+        let hover_strip = hover_strip.clone();
+        let picker_button = picker_button.clone();
+        let user_css_provider = user_css_provider.clone();
+        let current_settings = Rc::new(RefCell::new(settings));
+
+        glib::timeout_add_local(Duration::from_millis(100), move || {
+            let mut rerender = false;
+            let mut settings_to_apply = None;
+
+            while let Ok(event) = config_rx.try_recv() {
+                for path in &event.paths {
+                    if let Some(path_str) = path.to_str() {
+                        if path_str.contains("pins.json") {
+                            let mut dock_state = ctx.state.borrow_mut();
+                            let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
+                            if dock_state.pins != pins {
+                                dock_state.pins.clone_from(&pins);
+                                config::save_pins(&pins);
+                                rerender = true;
+                            }
+                        } else if path_str.contains("settings.json") {
+                            let new_settings = config::load_settings();
+                            if new_settings != *current_settings.borrow() {
+                                *current_settings.borrow_mut() = new_settings.clone();
+                                settings_to_apply = Some(new_settings);
+                            }
+                        } else if path_str.contains("style.css") {
+                            if let Some(provider) = user_css_provider.as_ref() {
+                                provider
+                                    .load_from_data(&config::load_style_css().unwrap_or_default());
+                            }
+                            rerender = true;
+                        }
+                    }
+                }
+            }
+
+            if let Some(new_settings) = settings_to_apply {
+                picker_button.set_visible(new_settings.show_pin_button);
+                autohide::apply_settings(&window, &hover_strip, &ctx.autohide, &new_settings);
+                rerender = true;
+            }
+
+            if rerender {
+                render_dock(&ctx);
+            }
+
+            ControlFlow::Continue
+        });
+    }
 
     {
         let ctx = ctx.clone();
@@ -319,71 +376,6 @@ fn build_ui(app: &gtk::Application) {
             }
 
             if changed {
-                render_dock(&ctx);
-            }
-
-            ControlFlow::Continue
-        });
-    }
-
-    {
-        let ctx = ctx.clone();
-        let config_watch = Rc::clone(&config_watch);
-        let picker_button = picker_button.clone();
-        let hover_strip = hover_strip.clone();
-        let window = window.clone();
-        let user_css_provider = user_css_provider.clone();
-
-        glib::timeout_add_local(Duration::from_millis(700), move || {
-            let mut rerender = false;
-            let mut settings_to_apply = None;
-
-            {
-                let mut watch = config_watch.borrow_mut();
-
-                if watch
-                    .pins
-                    .check_stable(modified_time(config::pins_path().as_deref()))
-                {
-                    let mut dock_state = ctx.state.borrow_mut();
-                    let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
-
-                    if dock_state.pins != pins {
-                        dock_state.pins.clone_from(&pins);
-                        config::save_pins(&pins);
-                        rerender = true;
-                    }
-                }
-
-                if watch
-                    .settings
-                    .check_stable(modified_time(config::settings_path().as_deref()))
-                {
-                    let new_settings = config::load_settings();
-                    if new_settings != watch.current_settings {
-                        watch.current_settings = new_settings.clone();
-                        settings_to_apply = Some(new_settings);
-                    }
-                }
-
-                if watch
-                    .style
-                    .check_stable(modified_time(config::style_path().as_deref()))
-                {
-                    if let Some(provider) = user_css_provider.as_ref() {
-                        provider.load_from_data(&config::load_style_css().unwrap_or_default());
-                    }
-                    rerender = true;
-                }
-            }
-
-            if let Some(new_settings) = settings_to_apply {
-                picker_button.set_visible(new_settings.show_pin_button);
-                autohide::apply_settings(&window, &hover_strip, &ctx.autohide, &new_settings);
-                rerender = true;
-            }
-
-            if rerender {
                 render_dock(&ctx);
             }
 
@@ -458,7 +450,9 @@ fn cleanup_widget_tree(widget: &gtk::Widget) {
         current = next;
     }
 
-    if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
+    if let Some(popover) = widget.downcast_ref::<gtk::Popover>()
+        && !popover.is_visible()
+    {
         popover.popdown();
         popover.set_child(None::<&gtk::Widget>);
         popover.unparent();
@@ -539,7 +533,11 @@ fn build_running_items(
             Some(build_known_item(app, windows, false, launching))
         })
         .collect();
-    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+    items.sort_by(|a, b| {
+        let a_key = (!a.active, a.label.to_lowercase());
+        let b_key = (!b.active, b.label.to_lowercase());
+        a_key.cmp(&b_key)
+    });
     items
 }
 
@@ -548,7 +546,11 @@ fn build_unknown_items(unknown: BTreeMap<String, Vec<WindowState>>) -> Vec<DockI
         .into_iter()
         .map(|(label, windows)| build_unknown_item(label, windows))
         .collect();
-    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+    items.sort_by(|a, b| {
+        let a_key = (!a.active, a.label.to_lowercase());
+        let b_key = (!b.active, b.label.to_lowercase());
+        a_key.cmp(&b_key)
+    });
     items
 }
 
@@ -623,11 +625,6 @@ fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
-    path.and_then(|path| std::fs::metadata(path).ok())
-        .and_then(|metadata| metadata.modified().ok())
-}
-
 struct DockLayout {
     margin_edge: Edge,
     transition_type: gtk::RevealerTransitionType,
@@ -686,47 +683,52 @@ impl DockLayout {
     }
 }
 
-struct FileDebouncer {
-    mtime: Option<SystemTime>,
-    stable_checks: u8,
-}
-
-impl FileDebouncer {
-    fn new(mtime: Option<SystemTime>) -> Self {
-        Self {
-            mtime,
-            stable_checks: 0,
-        }
-    }
-
-    fn check_stable(&mut self, current_mtime: Option<SystemTime>) -> bool {
-        if current_mtime != self.mtime {
-            self.mtime = current_mtime;
-            self.stable_checks = 0;
-        }
-        self.stable_checks = self.stable_checks.saturating_add(1);
-        if self.stable_checks >= 2 {
-            self.stable_checks = 0;
-            return true;
-        }
-        false
-    }
-}
-
 struct ConfigWatchState {
-    pins: FileDebouncer,
-    settings: FileDebouncer,
-    style: FileDebouncer,
-    current_settings: config::Settings,
+    watcher: RecommendedWatcher,
 }
 
 impl ConfigWatchState {
-    fn new(settings: config::Settings) -> Self {
-        Self {
-            pins: FileDebouncer::new(modified_time(config::pins_path().as_deref())),
-            settings: FileDebouncer::new(modified_time(config::settings_path().as_deref())),
-            style: FileDebouncer::new(modified_time(config::style_path().as_deref())),
-            current_settings: settings,
+    fn new(tx: mpsc::Sender<Event>) -> Self {
+        let mut watcher = RecommendedWatcher::new(
+            move |res| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            },
+            Config::default(),
+        )
+        .expect("Failed to create file watcher");
+
+        if let Some(pins_path) = config::pins_path() {
+            watcher
+                .watch(pins_path.as_path(), RecursiveMode::NonRecursive)
+                .expect("Failed to watch pins.json");
+        }
+        if let Some(settings_path) = config::settings_path() {
+            watcher
+                .watch(settings_path.as_path(), RecursiveMode::NonRecursive)
+                .expect("Failed to watch settings.json");
+        }
+        if let Some(style_path) = config::style_path() {
+            watcher
+                .watch(style_path.as_path(), RecursiveMode::NonRecursive)
+                .expect("Failed to watch style.css");
+        }
+
+        Self { watcher }
+    }
+}
+
+impl Drop for ConfigWatchState {
+    fn drop(&mut self) {
+        if let Some(pins_path) = config::pins_path() {
+            let _ = self.watcher.unwatch(pins_path.as_path());
+        }
+        if let Some(settings_path) = config::settings_path() {
+            let _ = self.watcher.unwatch(settings_path.as_path());
+        }
+        if let Some(style_path) = config::style_path() {
+            let _ = self.watcher.unwatch(style_path.as_path());
         }
     }
 }

@@ -1,12 +1,13 @@
 [package]
 name = "rudo"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 
 [dependencies]
 dirs = "6.0.0"
 gtk4 = "0.11.2"
 gtk4-layer-shell = "0.8.0"
+notify = "8.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.12"

@@ -139,14 +139,6 @@ impl WaylandState {
             .collect();
         let _ = self.event_tx.send(BackendEvent::Snapshot(snapshot));
     }
-
-    #[allow(dead_code)]
-    fn send_badge_update(&self, dock_id: &str, count: Option<u32>) {
-        let _ = self.event_tx.send(BackendEvent::BadgeUpdate {
-            id: dock_id.to_string(),
-            count,
-        });
-    }
 }
 
 impl Dispatch<WlRegistry, ()> for WaylandState {

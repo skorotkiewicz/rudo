@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use gtk::gdk;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -35,11 +33,7 @@ pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext,
     }
 
     {
-        let state = Rc::clone(&ctx.state);
-        let autohide = Rc::clone(&ctx.autohide);
-        let items_box = ctx.items_box.clone();
-        let picker_search = ctx.picker_search.clone();
-        let picker_list = ctx.picker_list.clone();
+        let ctx = ctx.clone();
         let target_pin = pin_id.to_string();
         let wrapper = wrapper.clone();
 
@@ -52,7 +46,7 @@ pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext,
 
             let insert_after = x > f64::from(wrapper.allocated_width()) / 2.0;
             let changed = {
-                let mut dock_state = state.borrow_mut();
+                let mut dock_state = ctx.state.borrow_mut();
                 reorder_pins(
                     &mut dock_state.pins,
                     &dragged_pin,
@@ -62,14 +56,7 @@ pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext,
             };
 
             if changed {
-                config::save_pins(&state.borrow().pins);
-                let ctx = RenderContext {
-                    state: Rc::clone(&state),
-                    items_box: items_box.clone(),
-                    picker_search: picker_search.clone(),
-                    picker_list: picker_list.clone(),
-                    autohide: Rc::clone(&autohide),
-                };
+                config::save_pins(&ctx.state.borrow().pins);
                 render_dock(&ctx);
             }
 
