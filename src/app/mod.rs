@@ -49,7 +49,6 @@ pub(crate) struct DockState {
     pub(crate) launching: HashMap<String, Instant>,
     pub(crate) icon_size: i32,
     last_rendered_items: Vec<(String, bool, u32)>,
-    pub(crate) group_by_output: bool,
 }
 
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(6);
@@ -138,7 +137,6 @@ fn build_ui(app: &gtk::Application) {
         launching: HashMap::new(),
         icon_size: settings.icon_size,
         last_rendered_items: Vec::new(),
-        group_by_output: settings.group_by_output,
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -478,11 +476,7 @@ pub(crate) fn icon_widget(app: Option<&AppRecord>, icon_size: i32) -> gtk::Image
 }
 
 fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
-    if state.group_by_output {
-        collect_items_by_output(state)
-    } else {
-        collect_items_flat(state)
-    }
+    collect_items_flat(state)
 }
 
 fn group_windows(
@@ -563,36 +557,6 @@ fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
     let pinned = build_pinned_items(state, &mut known);
     let mut running = build_running_items(known, state);
     running.extend(build_unknown_items(unknown));
-    (pinned, running)
-}
-
-fn collect_items_by_output(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
-    let mut by_output: BTreeMap<Option<u32>, Vec<WindowState>> = BTreeMap::new();
-    for window in &state.windows {
-        by_output
-            .entry(window.output_id)
-            .or_default()
-            .push(window.clone());
-    }
-
-    let mut global_known = BTreeMap::<String, Vec<WindowState>>::new();
-    for windows in by_output.values() {
-        let (known, _) = group_windows(windows, &state.catalog);
-        for (id, wins) in known {
-            global_known.entry(id).or_default().extend(wins);
-        }
-    }
-
-    let pinned = build_pinned_items(state, &mut global_known);
-    let mut running = Vec::new();
-
-    for (_output_id, windows) in by_output {
-        let (known, unknown) = group_windows(&windows, &state.catalog);
-        let mut output_items = build_running_items(known, state);
-        output_items.extend(build_unknown_items(unknown));
-        running.extend(output_items);
-    }
-
     (pinned, running)
 }
 

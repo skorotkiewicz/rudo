@@ -122,8 +122,6 @@ struct ToplevelState {
     title: Option<String>,
     active: bool,
     badge_count: Option<u32>,
-    output_id: Option<u32>,
-    coordinates: Option<(i32, i32)>,
 }
 
 impl WaylandState {
@@ -137,8 +135,6 @@ impl WaylandState {
                 title: window.title.clone(),
                 active: window.active,
                 badge_count: window.badge_count,
-                output_id: window.output_id,
-                coordinates: window.coordinates,
             })
             .collect();
         let _ = self.event_tx.send(BackendEvent::Snapshot(snapshot));
@@ -247,8 +243,6 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WaylandState {
                         title: None,
                         active: false,
                         badge_count: None,
-                        output_id: None,
-                        coordinates: None,
                     },
                 );
 

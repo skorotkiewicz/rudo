@@ -5,8 +5,6 @@ pub struct WindowState {
     pub title: Option<String>,
     pub active: bool,
     pub badge_count: Option<u32>,
-    pub output_id: Option<u32>,
-    pub coordinates: Option<(i32, i32)>,
 }
 
 #[derive(Clone, Debug)]

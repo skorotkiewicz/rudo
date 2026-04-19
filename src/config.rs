@@ -41,7 +41,6 @@ pub struct Settings {
     pub position: Position,
     pub animation_duration_ms: u32,
     pub menu: MenuConfig,
-    pub group_by_output: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,7 +68,6 @@ impl Default for Settings {
             position: Position::default(),
             animation_duration_ms: 220,
             menu: MenuConfig::default(),
-            group_by_output: false,
         }
     }
 }

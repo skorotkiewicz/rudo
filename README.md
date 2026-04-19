@@ -35,9 +35,8 @@ A small, elegant dock for Wayland.
 | Window tracking | ✅ Full | ✅ Full |
 | Activation/close | ✅ Full | ✅ Full |
 | Badge notifications | ❌ Not yet | ⚠️ Limited* |
-| Output grouping | ❌ Not yet | ⚠️ Limited* |
 
-\* Badge notifications and output grouping depend on compositor-specific protocol extensions. Most compositors don't currently provide badge counts or window coordinates through the standard protocol.
+\* Badge notifications depend on compositor-specific protocol extensions. Most compositors don't currently provide badge counts through the standard protocol.
 
 </details>
 
@@ -105,8 +104,7 @@ Default `settings.json`:
       {"label": "Restart", "icon": "system-restart-symbolic", "command": "systemctl reboot", "confirm": true},
       {"label": "Shutdown", "icon": "system-shutdown-symbolic", "command": "systemctl poweroff", "confirm": true}
     ]
-  },
-  "group_by_output": false
+  }
 }
 ```
 
@@ -125,15 +123,6 @@ Configure a power menu or custom actions via the `menu` section:
 - **items**: Array of menu items with `label`, `command`, optional `icon`, and `confirm` flag
 
 Set `confirm: true` to show a confirmation dialog before executing destructive commands.
-</details>
-
-<details>
-  <summary>Output-Based Window Grouping</summary>
-
-When `group_by_output: true`, windows are grouped by the monitor they're displayed on, and sorted by their spatial coordinates (top-to-bottom, left-to-right). This helps organize docks in multi-monitor setups.
-
-**Note**: This feature requires compositor support for providing output information and window coordinates via the `wlr-foreign-toplevel-management` protocol. Currently most compositors don't provide this data.
-
 </details>
 
 <details>
