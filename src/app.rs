@@ -73,62 +73,25 @@ impl DockState {
             .retain(|app_id, _| !opened_apps.contains(app_id.as_str()));
     }
 
-    /// Generate a signature of current dock state for change detection
-    fn items_changed(&self, previous: &[(String, bool, u32)]) -> bool {
-        let mut prev_iter = previous.iter();
-
-        for id in &self.pins {
-            let key = format!("pin:{id}");
-            match prev_iter.next() {
-                Some((k, false, 0)) if k == &key => {}
-                _ => return true,
-            }
-        }
-
-        for w in &self.windows {
-            let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
-            match prev_iter.next() {
-                Some((k, active, badge))
-                    if k == &key && *active == w.active && *badge == w.badge_count.unwrap_or(0) => {
-                }
-                _ => return true,
-            }
-        }
-
-        for id in self.launching.keys() {
-            let key = format!("launch:{id}");
-            match prev_iter.next() {
-                Some((k, false, 0)) if k == &key => {}
-                _ => return true,
-            }
-        }
-
-        prev_iter.next().is_some()
-    }
-
-    fn update_signature(&mut self) {
+    fn needs_render(&mut self) -> bool {
         let capacity = self.pins.len() + self.windows.len() + self.launching.len();
-        self.last_rendered_items = Vec::with_capacity(capacity);
-
-        self.last_rendered_items
-            .extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
-
-        self.last_rendered_items
-            .extend(self.windows.iter().map(|w| {
-                let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
-                (key, w.active, w.badge_count.unwrap_or(0))
-            }));
-
-        self.last_rendered_items.extend(
+        let mut sig = Vec::with_capacity(capacity);
+        sig.extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
+        sig.extend(self.windows.iter().map(|w| {
+            (
+                format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or("")),
+                w.active,
+                w.badge_count.unwrap_or(0),
+            )
+        }));
+        sig.extend(
             self.launching
                 .keys()
                 .map(|id| (format!("launch:{id}"), false, 0)),
         );
-    }
 
-    fn needs_render(&mut self) -> bool {
-        if self.items_changed(&self.last_rendered_items) {
-            self.update_signature();
+        if sig != self.last_rendered_items {
+            self.last_rendered_items = sig;
             true
         } else {
             false
@@ -187,7 +150,6 @@ struct ConfigWatchState {
     settings: FileDebouncer,
     style: FileDebouncer,
     current_settings: config::Settings,
-    pins_content_hash: u64,
 }
 
 /// Dock layout configuration based on screen position
@@ -254,7 +216,6 @@ impl ConfigWatchState {
             settings: FileDebouncer::new(modified_time(config::settings_path().as_deref())),
             style: FileDebouncer::new(modified_time(config::style_path().as_deref())),
             current_settings: settings,
-            pins_content_hash: 0,
         }
     }
 }
@@ -385,23 +346,13 @@ fn build_ui(app: &gtk::Application) {
     outer.append(&hover_strip);
     window.set_child(Some(&outer));
 
-    render_dock(
-        &state,
-        &items_box,
-        &picker_search,
-        &picker_list,
-        &Rc::new(RefCell::new(AutoHideState::new(
-            &dock_revealer,
-            autohide_enabled,
-            Duration::from_secs(settings.autohide.delay_secs.max(1)),
-        ))),
-    );
-
     let autohide = Rc::new(RefCell::new(AutoHideState::new(
         &dock_revealer,
         autohide_enabled,
         Duration::from_secs(settings.autohide.delay_secs.max(1)),
     )));
+
+    render_dock(&state, &items_box, &picker_search, &picker_list, &autohide);
     apply_autohide_settings(&window, &hover_strip, &autohide, &settings);
     install_autohide_hover(&picker_popover, &autohide);
 
@@ -503,10 +454,8 @@ fn build_ui(app: &gtk::Application) {
                 {
                     let mut dock_state = state.borrow_mut();
                     let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
-                    let new_hash = hash_pins(&pins);
 
-                    if new_hash != watch.pins_content_hash || dock_state.pins != pins {
-                        watch.pins_content_hash = new_hash;
+                    if dock_state.pins != pins {
                         dock_state.pins = pins.clone();
                         config::save_pins(&pins);
                         rerender = true;
@@ -640,13 +589,14 @@ fn icon_from_name(icon_name: &str, icon_size: i32) -> gtk::Image {
     image
 }
 
-/// Execute a shell command
 fn execute_command(command: &str) {
-    let _ = std::process::Command::new("sh")
+    if let Err(e) = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .spawn()
-        .map_err(|e| eprintln!("Failed to execute command '{}': {}", command, e));
+    {
+        eprintln!("Failed to execute command '{command}': {e}");
+    }
 }
 
 /// Show a confirmation dialog before executing command
@@ -1193,11 +1143,9 @@ fn collect_items_by_output(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) 
         })
         .collect::<Vec<_>>();
 
-    // Collect running items grouped by output, sorted by coordinates within each output
     let mut running = Vec::new();
 
     for (_output_id, (known, unknown)) in by_output {
-        // Collect known apps for this output
         let mut output_items: Vec<DockItem> = known
             .into_iter()
             .filter_map(|(id, windows)| {
@@ -1207,30 +1155,18 @@ fn collect_items_by_output(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) 
             })
             .collect();
 
-        // Collect unknown apps for this output
         let mut unknown_items: Vec<DockItem> = unknown
             .into_iter()
             .map(|(label, windows)| build_unknown_item(label, windows))
             .collect();
 
-        // Sort items by coordinates (top-to-bottom, left-to-right)
-        let sort_key = |item: &DockItem| {
-            let coords = item
-                .windows
-                .first()
-                .and_then(|w| w.coordinates)
-                .unwrap_or((0, 0));
-            (coords.1, coords.0) // Sort by y first, then x
-        };
-        output_items.sort_by_key(sort_key);
-        unknown_items.sort_by_key(sort_key);
+        let sort_key = |item: &DockItem| (!item.active, item.label.to_lowercase());
+        output_items.sort_by_cached_key(sort_key);
+        unknown_items.sort_by_cached_key(sort_key);
 
         running.extend(output_items);
         running.extend(unknown_items);
     }
-
-    // Sort by activity within the output groups
-    running.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
 
     (pinned, running)
 }
@@ -1603,15 +1539,6 @@ fn window_menu_label(window: &WindowState, multiple: bool) -> String {
 fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
     path.and_then(|path| std::fs::metadata(path).ok())
         .and_then(|metadata| metadata.modified().ok())
-}
-
-fn hash_pins(pins: &[String]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    pins.hash(&mut hasher);
-    hasher.finish()
 }
 
 const CSS: &str = r#"
