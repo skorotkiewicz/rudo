@@ -27,6 +27,8 @@ pub struct Settings {
     pub icon_size: i32,
     pub position: String,
     pub animation_duration_ms: u32,
+    pub menu: MenuConfig,
+    pub group_by_output: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,8 +55,75 @@ impl Default for Settings {
             icon_size: 24,
             position: "bottom".to_string(),
             animation_duration_ms: 220,
+            menu: MenuConfig::default(),
+            group_by_output: false,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MenuConfig {
+    pub enabled: bool,
+    pub icon: String,
+    pub position: MenuPosition,
+    pub items: Vec<MenuItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MenuPosition {
+    #[serde(rename = "start")]
+    Start,
+    #[serde(rename = "end")]
+    End,
+}
+
+impl Default for MenuConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            icon: "system-shutdown-symbolic".to_string(),
+            position: MenuPosition::End,
+            items: default_menu_items(),
+        }
+    }
+}
+
+fn default_menu_items() -> Vec<MenuItem> {
+    vec![
+        MenuItem {
+            label: "Lock".to_string(),
+            icon: Some("system-lock-screen-symbolic".to_string()),
+            command: "loginctl lock-session".to_string(),
+            confirm: false,
+        },
+        MenuItem {
+            label: "Logout".to_string(),
+            icon: Some("system-log-out-symbolic".to_string()),
+            command: "loginctl terminate-user $USER".to_string(),
+            confirm: true,
+        },
+        MenuItem {
+            label: "Restart".to_string(),
+            icon: Some("system-restart-symbolic".to_string()),
+            command: "systemctl reboot".to_string(),
+            confirm: true,
+        },
+        MenuItem {
+            label: "Shutdown".to_string(),
+            icon: Some("system-shutdown-symbolic".to_string()),
+            command: "systemctl poweroff".to_string(),
+            confirm: true,
+        },
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MenuItem {
+    pub label: String,
+    pub icon: Option<String>,
+    pub command: String,
+    pub confirm: bool,
 }
 
 pub fn load_pins() -> Vec<String> {

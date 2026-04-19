@@ -121,6 +121,9 @@ struct ToplevelState {
     app_id: Option<String>,
     title: Option<String>,
     active: bool,
+    badge_count: Option<u32>,
+    output_id: Option<u32>,
+    coordinates: Option<(i32, i32)>,
 }
 
 impl WaylandState {
@@ -133,9 +136,20 @@ impl WaylandState {
                 app_id: window.app_id.clone(),
                 title: window.title.clone(),
                 active: window.active,
+                badge_count: window.badge_count,
+                output_id: window.output_id,
+                coordinates: window.coordinates,
             })
             .collect();
         let _ = self.event_tx.send(BackendEvent::Snapshot(snapshot));
+    }
+
+    #[allow(dead_code)]
+    fn send_badge_update(&self, dock_id: &str, count: Option<u32>) {
+        let _ = self.event_tx.send(BackendEvent::BadgeUpdate {
+            id: dock_id.to_string(),
+            count,
+        });
     }
 }
 
@@ -232,6 +246,9 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WaylandState {
                         app_id: None,
                         title: None,
                         active: false,
+                        badge_count: None,
+                        output_id: None,
+                        coordinates: None,
                     },
                 );
 
@@ -285,6 +302,10 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
                 }
                 state.publish_snapshot();
             }
+            // Note: Badge events are a compositor-specific extension
+            // (e.g., Hyprland adds custom events). Standard foreign_toplevel v1
+            // doesn't support badges. For now, badge support is limited to
+            // compositors that provide this data through other means.
             _ => {}
         }
     }
