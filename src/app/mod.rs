@@ -157,7 +157,7 @@ fn build_ui(app: &gtk::Application) {
         window.set_namespace(Some("rudo-dock"));
         window.set_layer(Layer::Top);
         window.set_keyboard_mode(KeyboardMode::None);
-        window.set_anchor(layout.anchor_edge, true);
+        window.set_anchor(layout.margin_edge, true);
         window.set_margin(layout.margin_edge, 6);
     } else {
         window.set_decorated(false);
@@ -173,11 +173,12 @@ fn build_ui(app: &gtk::Application) {
         .reveal_child(true)
         .build();
 
-    let dock_surface = gtk::Box::new(layout.items_orientation(), 12);
+    let dock_surface = gtk::Box::new(layout.items_orientation, 12);
     dock_surface.add_css_class("dock-surface");
 
-    let items_box = gtk::Box::new(layout.items_orientation(), 10);
+    let items_box = gtk::Box::new(layout.items_orientation, 10);
     items_box.set_valign(gtk::Align::Center);
+    items_box.set_halign(gtk::Align::Center);
 
     let picker_button = gtk::Button::new();
     picker_button.add_css_class("dock-item");
@@ -229,12 +230,16 @@ fn build_ui(app: &gtk::Application) {
     dock_revealer.set_child(Some(&dock_surface));
     outer.append(&dock_revealer);
 
-    let hover_strip = gtk::Box::new(layout.items_orientation(), 0);
+    let hover_strip = gtk::Box::new(layout.items_orientation, 0);
     hover_strip.add_css_class("dock-hover-strip");
     hover_strip.set_halign(layout.halign);
     hover_strip.set_valign(layout.valign);
-    hover_strip.set_hexpand(true);
+    hover_strip.set_hexpand(layout.strip_expand_horizontal);
+    hover_strip.set_vexpand(layout.strip_expand_vertical);
     hover_strip.set_visible(autohide_enabled);
+    if layout.strip_expand_vertical {
+        hover_strip.add_css_class("is-vertical");
+    }
     outer.append(&hover_strip);
     window.set_child(Some(&outer));
 
@@ -416,8 +421,16 @@ fn render_dock(ctx: &RenderContext) {
     }
 
     if show_separator {
-        let separator = gtk::Separator::new(gtk::Orientation::Vertical);
+        let sep_orientation = match ctx.items_box.orientation() {
+            gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
+            gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
+            _ => unreachable!(),
+        };
+        let separator = gtk::Separator::new(sep_orientation);
         separator.add_css_class("dock-separator");
+        if sep_orientation == gtk::Orientation::Horizontal {
+            separator.add_css_class("is-vertical");
+        }
         ctx.items_box.append(&separator);
     }
 
@@ -656,57 +669,59 @@ fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
 }
 
 struct DockLayout {
-    anchor_edge: Edge,
     margin_edge: Edge,
     transition_type: gtk::RevealerTransitionType,
     orientation: gtk::Orientation,
+    items_orientation: gtk::Orientation,
     halign: gtk::Align,
     valign: gtk::Align,
+    strip_expand_horizontal: bool,
+    strip_expand_vertical: bool,
 }
 
 impl DockLayout {
     fn from_position(position: config::Position) -> Self {
         match position {
             config::Position::Top => Self {
-                anchor_edge: Edge::Top,
                 margin_edge: Edge::Top,
                 transition_type: gtk::RevealerTransitionType::SlideDown,
                 orientation: gtk::Orientation::Vertical,
+                items_orientation: gtk::Orientation::Horizontal,
                 halign: gtk::Align::Center,
                 valign: gtk::Align::Start,
+                strip_expand_horizontal: true,
+                strip_expand_vertical: false,
             },
             config::Position::Left => Self {
-                anchor_edge: Edge::Left,
                 margin_edge: Edge::Left,
                 transition_type: gtk::RevealerTransitionType::SlideRight,
                 orientation: gtk::Orientation::Horizontal,
+                items_orientation: gtk::Orientation::Vertical,
                 halign: gtk::Align::Start,
                 valign: gtk::Align::Center,
+                strip_expand_horizontal: false,
+                strip_expand_vertical: true,
             },
             config::Position::Right => Self {
-                anchor_edge: Edge::Right,
                 margin_edge: Edge::Right,
                 transition_type: gtk::RevealerTransitionType::SlideLeft,
                 orientation: gtk::Orientation::Horizontal,
+                items_orientation: gtk::Orientation::Vertical,
                 halign: gtk::Align::End,
                 valign: gtk::Align::Center,
+                strip_expand_horizontal: false,
+                strip_expand_vertical: true,
             },
             config::Position::Bottom => Self {
-                anchor_edge: Edge::Bottom,
                 margin_edge: Edge::Bottom,
                 transition_type: gtk::RevealerTransitionType::SlideUp,
                 orientation: gtk::Orientation::Vertical,
+                items_orientation: gtk::Orientation::Horizontal,
                 halign: gtk::Align::Center,
                 valign: gtk::Align::End,
+                strip_expand_horizontal: true,
+                strip_expand_vertical: false,
             },
-        }
-    }
-
-    fn items_orientation(&self) -> gtk::Orientation {
-        match self.orientation {
-            gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
-            gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
-            _ => unreachable!(),
         }
     }
 }

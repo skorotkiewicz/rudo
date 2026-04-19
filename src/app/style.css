@@ -132,6 +132,19 @@
     background: rgba(255, 255, 255, 0.12);
 }
 
+.dock-hover-strip.is-vertical {
+    min-width: 8px;
+    min-height: 220px;
+    margin-top: 0;
+    margin-left: 4px;
+}
+
+.dock-separator.is-vertical {
+    min-width: 44px;
+    min-height: 0;
+    margin: 2px 0;
+}
+
 .picker {
     padding: 12px;
 }
