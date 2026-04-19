@@ -369,7 +369,9 @@ fn build_ui(app: &gtk::Application) {
         let picker_search = picker_search.clone();
         let picker_list = picker_list.clone();
         let picker_popover = picker_popover.clone();
+        let window_for_open = window.clone();
         picker_button.connect_clicked(move |_| {
+            window_for_open.set_keyboard_mode(KeyboardMode::OnDemand);
             picker_search.set_text("");
             render_picker(&state, &picker_list, "");
             picker_popover.popup();
@@ -383,6 +385,13 @@ fn build_ui(app: &gtk::Application) {
         let picker_list = picker_list.clone();
         picker_search.connect_search_changed(move |entry| {
             render_picker(&state, &picker_list, entry.text().as_ref());
+        });
+    }
+
+    {
+        let window_for_close = window.clone();
+        picker_popover.connect_closed(move |_| {
+            window_for_close.set_keyboard_mode(KeyboardMode::None);
         });
     }
 
