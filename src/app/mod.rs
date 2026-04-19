@@ -349,7 +349,7 @@ fn build_ui(app: &gtk::Application) {
                     let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
 
                     if dock_state.pins != pins {
-                        dock_state.pins = pins.clone();
+                        dock_state.pins.clone_from(&pins);
                         config::save_pins(&pins);
                         rerender = true;
                     }
@@ -414,7 +414,7 @@ fn render_dock(ctx: &RenderContext) {
     };
     let show_separator = !pinned_items.is_empty() && !running_items.is_empty();
 
-    for item in pinned_items {
+    for item in &pinned_items {
         ctx.items_box.append(&item::build_item_widget(ctx, item));
     }
 
@@ -432,7 +432,7 @@ fn render_dock(ctx: &RenderContext) {
         ctx.items_box.append(&separator);
     }
 
-    for item in running_items {
+    for item in &running_items {
         ctx.items_box.append(&item::build_item_widget(ctx, item));
     }
 

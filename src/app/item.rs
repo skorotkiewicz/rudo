@@ -12,7 +12,7 @@ use crate::model::WindowState;
 
 use super::{DockItem, DockState, RenderContext, autohide, icon_widget};
 
-pub(crate) fn build_item_widget(ctx: &RenderContext, item: DockItem) -> gtk::Box {
+pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Box {
     let state = &ctx.state;
     let autohide = &ctx.autohide;
 
@@ -82,7 +82,6 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: DockItem) -> gtk::Box
 
     {
         let state = Rc::clone(state);
-        let item = item.clone();
         let ctx = ctx.clone();
         let popover = build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
             super::render_dock(&ctx)
@@ -132,10 +131,11 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: DockItem) -> gtk::Box
     wrapper
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn build_context_menu(
     state: Rc<RefCell<DockState>>,
     parent: &impl gtk::prelude::IsA<gtk::Widget>,
-    item: DockItem,
+    item: &DockItem,
     autohide: &Rc<RefCell<autohide::AutoHideState>>,
     rerender: impl Fn() + 'static,
 ) -> gtk::Popover {
@@ -190,7 +190,7 @@ pub(crate) fn build_context_menu(
         }
     }
 
-    if let Some(app) = item.app.clone() {
+    if let Some(app) = item.app.as_ref() {
         layout.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
         let new_window = gtk::Button::with_label("Open New Window");
@@ -413,7 +413,7 @@ fn execute_command(command: &str) {
 
 fn show_confirmation_dialog(label: &str, command: &str, parent: &impl IsA<gtk::Widget>) {
     let window = gtk::Window::new();
-    window.set_title(Some(&format!("Confirm {}", label)));
+    window.set_title(Some(&format!("Confirm {label}")));
     window.set_default_width(300);
     window.set_default_height(120);
     window.set_modal(true);

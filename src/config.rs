@@ -258,7 +258,7 @@ pub fn settings_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join("settings.json"))
 }
 
-const DEFAULT_STYLE_CSS: &str = r#"/* Rudo user overrides
+const DEFAULT_STYLE_CSS: &str = r"/* Rudo user overrides
  *
  * This file is loaded on every Rudo start after the built-in theme.
  * Override any selector you want here.
@@ -274,4 +274,4 @@ const DEFAULT_STYLE_CSS: &str = r#"/* Rudo user overrides
  *     border-color: rgba(120, 210, 255, 0.55);
  * }
  */
-"#;
+";

@@ -1,6 +1,6 @@
 /* Rudo Example Themes - Comprehensive CSS Reference
  * =================================================
- * 
+ *
  * Copy sections you want to use into ~/.config/rudo/style.css
  * All values shown are examples - customize colors, sizes, and effects to taste.
  */
@@ -87,13 +87,13 @@
 }
 
 .dock-indicator {
-    width: 4px;
-    height: 4px;
+    min-width: 4px;
+    min-height: 4px;
     background: #888;
 }
 
 .dock-indicator.is-active {
-    width: 16px;
+    min-width: 16px;
     background: #fff;
 }
 
@@ -195,24 +195,18 @@
     background: rgba(255, 255, 255, 0.12);
 }
 
-.dock-item.is-running::after {
-    content: "";
-    position: absolute;
-    bottom: -6px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: #fff;
+.dock-item.is-running {
+    border-color: rgba(255, 165, 0, 0.3);
 }
 
 .dock-indicator {
-    width: 4px;
-    height: 4px;
+    min-width: 4px;
+    min-height: 4px;
     background: rgba(255, 255, 255, 0.6);
 }
 
 .dock-indicator.is-active {
-    width: 18px;
+    min-width: 18px;
     background: linear-gradient(90deg, #60a5fa, #3b82f6);
 }
 */
@@ -251,13 +245,13 @@
 }
 
 .dock-indicator {
-    width: 8px;
-    height: 8px;
+    min-width: 8px;
+    min-height: 8px;
     background: #000;
 }
 
 .dock-indicator.is-active {
-    width: 24px;
+    min-width: 24px;
     background: #0066cc;
 }
 
@@ -392,20 +386,7 @@
 
 /* Glow effect for active items */
 .dock-item.is-active {
-    position: relative;
-}
-
-.dock-item.is-active::before {
-    content: "";
-    position: absolute;
-    inset: -2px;
-    border-radius: inherit;
-    background: linear-gradient(135deg, 
-        rgba(120, 180, 255, 0.4), 
-        rgba(255, 120, 180, 0.4));
-    filter: blur(8px);
-    z-index: -1;
-    opacity: 0.6;
+    background: rgba(120, 180, 255, 0.25);
 }
 
 /* ============================================================
@@ -463,9 +444,9 @@ Available CSS Classes:
 
 Tips:
 -----
-1. Use browser DevTools (GTK Inspector) to debug live: 
+1. Use browser DevTools (GTK Inspector) to debug live:
    GTK_DEBUG=interactive rudo
-   
+
 2. Changes to style.css are detected every 700ms and reload automatically
 
 3. Combine multiple themes by uncommenting sections or mixing properties

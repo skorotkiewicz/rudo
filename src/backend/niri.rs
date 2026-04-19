@@ -19,22 +19,23 @@ pub fn spawn(event_tx: Sender<BackendEvent>) -> Option<BackendController> {
 
     {
         let socket_path = socket_path.clone();
+        let event_tx = event_tx.clone();
         thread::Builder::new()
             .name("rudo-niri-events".into())
-            .spawn(move || event_loop(socket_path, event_tx))
+            .spawn(move || event_loop(&socket_path, &event_tx))
             .ok()?;
     }
 
     thread::Builder::new()
         .name("rudo-niri-commands".into())
-        .spawn(move || command_loop(socket_path, rx))
+        .spawn(move || command_loop(&socket_path, &rx))
         .ok()?;
 
     Some(controller)
 }
 
-fn event_loop(socket_path: PathBuf, event_tx: Sender<BackendEvent>) {
-    let Ok(mut stream) = UnixStream::connect(&socket_path) else {
+fn event_loop(socket_path: &PathBuf, event_tx: &Sender<BackendEvent>) {
+    let Ok(mut stream) = UnixStream::connect(socket_path) else {
         return;
     };
 
@@ -85,28 +86,33 @@ fn event_loop(socket_path: PathBuf, event_tx: Sender<BackendEvent>) {
                     .into_iter()
                     .map(|window| (window.id, window))
                     .collect();
-                publish_snapshot(&event_tx, &windows);
+                publish_snapshot(event_tx, &windows);
             }
             Event::WindowOpenedOrChanged { window } => {
+                if window.is_focused {
+                    for w in windows.values_mut() {
+                        w.is_focused = false;
+                    }
+                }
                 windows.insert(window.id, window);
-                publish_snapshot(&event_tx, &windows);
+                publish_snapshot(event_tx, &windows);
             }
             Event::WindowClosed { id } => {
                 windows.remove(&id);
-                publish_snapshot(&event_tx, &windows);
+                publish_snapshot(event_tx, &windows);
             }
             Event::WindowFocusChanged { id } => {
                 for (window_id, window) in &mut windows {
                     window.is_focused = Some(*window_id) == id;
                 }
-                publish_snapshot(&event_tx, &windows);
+                publish_snapshot(event_tx, &windows);
             }
-            _ => {}
+            Event::Other => {}
         }
     }
 }
 
-fn command_loop(socket_path: PathBuf, rx: std::sync::mpsc::Receiver<BackendRequest>) {
+fn command_loop(socket_path: &PathBuf, rx: &std::sync::mpsc::Receiver<BackendRequest>) {
     while let Ok(request) = rx.recv() {
         let id = match &request {
             BackendRequest::Activate(id) | BackendRequest::Close(id) => id,
@@ -126,7 +132,7 @@ fn command_loop(socket_path: PathBuf, rx: std::sync::mpsc::Receiver<BackendReque
             }),
         };
 
-        let Ok(mut stream) = UnixStream::connect(&socket_path) else {
+        let Ok(mut stream) = UnixStream::connect(socket_path) else {
             continue;
         };
 
