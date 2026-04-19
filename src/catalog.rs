@@ -10,9 +10,13 @@ pub struct AppRecord {
     pub id: String,
     pub name: String,
     pub icon: Option<gio::Icon>,
+    #[allow(dead_code)]
     pub startup_wm_class: Option<String>,
+    #[allow(dead_code)]
     pub executable: Option<String>,
     app_info: gio::AppInfo,
+    // Pre-normalized searchable fields to avoid repeated normalization
+    search_keys: Vec<String>,
 }
 
 impl AppRecord {
@@ -48,14 +52,25 @@ impl AppCatalog {
             let icon = app.icon();
             let executable = basename(app.executable());
             let startup_wm_class = None;
+            let name = app.display_name().to_string();
+
+            // Pre-normalize searchable fields for faster matching
+            let mut search_keys = vec![normalize_key(&id), normalize_key(&name)];
+            if let Some(wm_class) = startup_wm_class.as_deref() {
+                search_keys.push(normalize_key(wm_class));
+            }
+            if let Some(exec) = executable.as_deref() {
+                search_keys.push(normalize_key(exec));
+            }
 
             let record = AppRecord {
                 id: id.clone(),
-                name: app.display_name().to_string(),
+                name,
                 icon,
                 startup_wm_class: startup_wm_class.clone(),
                 executable: executable.clone(),
                 app_info: app,
+                search_keys,
             };
 
             register_alias(&mut aliases, &id, &id);
@@ -95,7 +110,19 @@ impl AppCatalog {
         limit: usize,
         exclude_ids: &HashSet<String>,
     ) -> Vec<AppRecord> {
-        let query = normalize_key(query);
+        // Fast path: empty query returns all apps (used by picker)
+        if query.is_empty() {
+            return self
+                .ordered_ids
+                .iter()
+                .filter(|id| !exclude_ids.contains(*id))
+                .filter_map(|id| self.apps.get(id))
+                .take(limit)
+                .cloned()
+                .collect();
+        }
+
+        let normalized_query = normalize_key(query);
 
         let mut exact = Vec::new();
         let mut prefix = Vec::new();
@@ -110,32 +137,20 @@ impl AppCatalog {
                 continue;
             };
 
-            if query.is_empty() {
+            // Use pre-normalized search keys - much faster
+            if app.search_keys.iter().any(|key| key == &normalized_query) {
                 exact.push(app.clone());
-                if exact.len() >= limit {
-                    break;
-                }
-                continue;
-            }
-
-            let haystacks = [
-                normalize_key(&app.id),
-                normalize_key(&app.name),
-                app.startup_wm_class
-                    .as_deref()
-                    .map(normalize_key)
-                    .unwrap_or_default(),
-                app.executable
-                    .as_deref()
-                    .map(normalize_key)
-                    .unwrap_or_default(),
-            ];
-
-            if haystacks.iter().any(|value| value == &query) {
-                exact.push(app.clone());
-            } else if haystacks.iter().any(|value| value.starts_with(&query)) {
+            } else if app
+                .search_keys
+                .iter()
+                .any(|key| key.starts_with(&normalized_query))
+            {
                 prefix.push(app.clone());
-            } else if haystacks.iter().any(|value| value.contains(&query)) {
+            } else if app
+                .search_keys
+                .iter()
+                .any(|key| key.contains(&normalized_query))
+            {
                 fuzzy.push(app.clone());
             }
         }

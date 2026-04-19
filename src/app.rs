@@ -42,6 +42,7 @@ struct DockState {
     backend: Option<BackendController>,
     launching: HashMap<String, Instant>,
     icon_size: i32,
+    last_rendered_items: Vec<String>,
 }
 
 impl DockState {
@@ -69,6 +70,46 @@ impl DockState {
         self.launching
             .retain(|app_id, _| !opened_apps.contains(app_id.as_str()));
     }
+
+    /// Generate a signature of current dock state for change detection
+    fn items_signature(&self) -> Vec<String> {
+        let mut sig =
+            Vec::with_capacity(self.pins.len() + self.windows.len() + self.launching.len());
+
+        // Add pins
+        for pin in &self.pins {
+            sig.push(format!("pin:{pin}"));
+        }
+
+        // Add windows with their active state
+        for window in &self.windows {
+            let key = format!(
+                "{}:{}:{}",
+                window.id,
+                window.app_id.as_deref().unwrap_or(""),
+                if window.active { "active" } else { "inactive" }
+            );
+            sig.push(key);
+        }
+
+        // Add launching apps
+        for app_id in self.launching.keys() {
+            sig.push(format!("launching:{app_id}"));
+        }
+
+        sig
+    }
+
+    /// Check if dock needs re-rendering based on state changes
+    fn needs_render(&mut self) -> bool {
+        let current = self.items_signature();
+        if current != self.last_rendered_items {
+            self.last_rendered_items = current;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 struct AutoHideState {
@@ -94,6 +135,12 @@ struct ConfigWatchState {
     settings_mtime: Option<SystemTime>,
     style_mtime: Option<SystemTime>,
     settings: config::Settings,
+    // Debounce counters to avoid processing incomplete writes
+    pins_change_counter: u8,
+    settings_change_counter: u8,
+    style_change_counter: u8,
+    // Track content hashes to avoid unnecessary parsing
+    pins_content_hash: u64,
 }
 
 /// Dock layout configuration based on screen position
@@ -160,6 +207,10 @@ impl ConfigWatchState {
             settings_mtime: modified_time(config::settings_path().as_deref()),
             style_mtime: modified_time(config::style_path().as_deref()),
             settings,
+            pins_change_counter: 0,
+            settings_change_counter: 0,
+            style_change_counter: 0,
+            pins_content_hash: 0,
         }
     }
 }
@@ -186,6 +237,7 @@ fn build_ui(app: &gtk::Application) {
         backend,
         launching: HashMap::new(),
         icon_size: settings.icon_size,
+        last_rendered_items: Vec::new(),
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -363,35 +415,64 @@ fn build_ui(app: &gtk::Application) {
             {
                 let mut watch = config_watch.borrow_mut();
 
+                // Debounce pins changes - wait for mtime to stabilize
                 let pins_mtime = modified_time(config::pins_path().as_deref());
                 if pins_mtime != watch.pins_mtime {
                     watch.pins_mtime = pins_mtime;
-                    let mut dock_state = state.borrow_mut();
-                    let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
-                    if dock_state.pins != pins {
-                        dock_state.pins = pins.clone();
-                        config::save_pins(&pins);
-                        rerender = true;
+                    watch.pins_change_counter = watch.pins_change_counter.saturating_add(1);
+                } else if watch.pins_change_counter > 0 {
+                    // Mtime stable, process if debounce threshold met
+                    watch.pins_change_counter += 1;
+                    if watch.pins_change_counter >= 2 {
+                        // ~1.4s delay for debounce
+                        watch.pins_change_counter = 0;
+
+                        let mut dock_state = state.borrow_mut();
+                        let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
+                        let new_hash = hash_pins(&pins);
+
+                        // Only process if content actually changed
+                        if new_hash != watch.pins_content_hash || dock_state.pins != pins {
+                            watch.pins_content_hash = new_hash;
+                            dock_state.pins = pins.clone();
+                            config::save_pins(&pins);
+                            rerender = true;
+                        }
                     }
                 }
 
+                // Debounce settings changes
                 let settings_mtime = modified_time(config::settings_path().as_deref());
                 if settings_mtime != watch.settings_mtime {
                     watch.settings_mtime = settings_mtime;
-                    let new_settings = config::load_settings();
-                    if new_settings != watch.settings {
-                        watch.settings = new_settings.clone();
-                        settings_to_apply = Some(new_settings);
+                    watch.settings_change_counter = watch.settings_change_counter.saturating_add(1);
+                } else if watch.settings_change_counter > 0 {
+                    watch.settings_change_counter += 1;
+                    if watch.settings_change_counter >= 2 {
+                        watch.settings_change_counter = 0;
+
+                        let new_settings = config::load_settings();
+                        if new_settings != watch.settings {
+                            watch.settings = new_settings.clone();
+                            settings_to_apply = Some(new_settings);
+                        }
                     }
                 }
 
+                // Debounce style changes
                 let style_mtime = modified_time(config::style_path().as_deref());
                 if style_mtime != watch.style_mtime {
                     watch.style_mtime = style_mtime;
-                    if let Some(provider) = user_css_provider.as_ref() {
-                        provider.load_from_data(&config::load_style_css().unwrap_or_default());
+                    watch.style_change_counter = watch.style_change_counter.saturating_add(1);
+                } else if watch.style_change_counter > 0 {
+                    watch.style_change_counter += 1;
+                    if watch.style_change_counter >= 2 {
+                        watch.style_change_counter = 0;
+                        if let Some(provider) = user_css_provider.as_ref() {
+                            provider.load_from_data(&config::load_style_css().unwrap_or_default());
+                        }
+                        rerender = true;
                     }
-                    rerender = true;
                 }
             }
 
@@ -424,6 +505,11 @@ fn render_dock(
     picker_list: &gtk::Box,
     autohide: &Rc<RefCell<AutoHideState>>,
 ) {
+    // Early exit if nothing changed - avoid expensive widget rebuilds
+    if !state.borrow_mut().needs_render() {
+        return;
+    }
+
     clear_children(items_box);
 
     let (pinned_items, running_items) = {
@@ -1183,6 +1269,22 @@ fn window_menu_label(window: &WindowState, multiple: bool) -> String {
 fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
     path.and_then(|path| std::fs::metadata(path).ok())
         .and_then(|metadata| metadata.modified().ok())
+}
+
+/// Simple FNV-1a hash for content comparison
+fn hash_pins(pins: &[String]) -> u64 {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for pin in pins {
+        for &byte in pin.as_bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash ^= 0; // delimiter between pins
+    }
+    hash
 }
 
 const CSS: &str = r#"
