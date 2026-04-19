@@ -6,7 +6,8 @@ A small, elegant dock for Wayland.
 
 `rudo` is built for a clean desktop: pinned apps, live running windows, gentle autohide, and simple user configuration. It is designed to feel at home on `niri`, while still working with other Wayland compositors that expose the right protocols.
 
-## Features
+<details>
+  <summary>Features</summary>
 
 - Wayland-first dock UI with GTK4 + layer-shell
 - Persistent pinned apps
@@ -18,6 +19,8 @@ A small, elegant dock for Wayland.
 - Optional autohide with hover-to-reveal
 - User theming via CSS
 - User behavior settings via JSON
+
+</details>
 
 ## Compositor Support
 
@@ -97,7 +100,7 @@ Default `settings.json`:
     "icon": "system-shutdown-symbolic",
     "position": "end",
     "items": [
-      {"label": "Lock", "icon": "system-lock-screen-symbolic", "command": "loginctl lock-session", "confirm": false},
+      {"label": "Lock", "icon": "system-lock-screen-symbolic", "command": "swaylock -f", "confirm": false},
       {"label": "Logout", "icon": "system-log-out-symbolic", "command": "loginctl terminate-user $USER", "confirm": true},
       {"label": "Restart", "icon": "system-restart-symbolic", "command": "systemctl reboot", "confirm": true},
       {"label": "Shutdown", "icon": "system-shutdown-symbolic", "command": "systemctl poweroff", "confirm": true}
