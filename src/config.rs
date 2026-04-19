@@ -19,13 +19,26 @@ struct PinStore {
     pins: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Position {
+    #[default]
+    #[serde(rename = "bottom")]
+    Bottom,
+    #[serde(rename = "top")]
+    Top,
+    #[serde(rename = "left")]
+    Left,
+    #[serde(rename = "right")]
+    Right,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub autohide: AutoHideSettings,
     pub show_pin_button: bool,
     pub icon_size: i32,
-    pub position: String,
+    pub position: Position,
     pub animation_duration_ms: u32,
     pub menu: MenuConfig,
     pub group_by_output: bool,
@@ -53,7 +66,7 @@ impl Default for Settings {
             autohide: AutoHideSettings::default(),
             show_pin_button: true,
             icon_size: 24,
-            position: "bottom".to_string(),
+            position: Position::default(),
             animation_duration_ms: 220,
             menu: MenuConfig::default(),
             group_by_output: false,

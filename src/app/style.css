@@ -1,0 +1,175 @@
+.rudo-window {
+    background: transparent;
+}
+
+.dock-surface {
+    padding: 8px 10px;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background:
+        linear-gradient(180deg, rgba(31, 39, 55, 0.94), rgba(18, 24, 36, 0.92));
+    box-shadow:
+        0 20px 40px rgba(0, 0, 0, 0.42),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.dock-item,
+.picker-button {
+    min-width: 46px;
+    min-height: 46px;
+    padding: 0;
+    border-radius: 16px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: none;
+}
+
+.dock-item:hover,
+.picker-button:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dock-item.is-drop-target {
+    border-color: rgba(255, 214, 120, 0.48);
+    background: rgba(255, 214, 120, 0.12);
+}
+
+.dock-item.is-running {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.dock-item.is-active {
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255, 209, 102, 0.22), transparent 56%),
+        rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 214, 120, 0.44);
+}
+
+.dock-item.is-launching {
+    background:
+        radial-gradient(circle at 50% 0%, rgba(255, 214, 120, 0.16), transparent 56%),
+        rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 214, 120, 0.24);
+}
+
+.dock-indicator {
+    min-width: 8px;
+    min-height: 8px;
+    margin-top: 1px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.54);
+}
+
+.dock-indicator.is-active {
+    min-width: 18px;
+    background: linear-gradient(90deg, #ffd166, #fca311);
+}
+
+.launch-spinner {
+    color: #ffd166;
+}
+
+.dock-badge {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #ff4444, #ff2222);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.42);
+    margin-top: -2px;
+    margin-right: -2px;
+}
+
+.dock-badge-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: white;
+}
+
+.dock-menu {
+    padding: 6px;
+}
+
+.dock-menu-item {
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.dock-menu-item:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.menu-button {
+    min-width: 46px;
+    min-height: 46px;
+    padding: 0;
+    border-radius: 16px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: none;
+}
+
+.menu-button:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.dock-separator {
+    min-height: 44px;
+    margin: 0 2px;
+    opacity: 0.28;
+}
+
+.dock-hover-strip {
+    min-width: 220px;
+    min-height: 8px;
+    margin-top: 4px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.picker {
+    padding: 12px;
+}
+
+.picker-row {
+    padding: 10px 12px;
+    border-radius: 18px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.picker-row:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.picker-row-title {
+    font-weight: 700;
+}
+
+.picker-row-subtitle,
+.picker-empty {
+    opacity: 0.68;
+}
+
+.item-menu {
+    padding: 10px;
+}
+
+.item-menu-title {
+    font-weight: 700;
+}
+
+.item-menu-subtitle,
+.item-menu-section {
+    opacity: 0.68;
+}
+
+.item-menu button {
+    border-radius: 14px;
+}
