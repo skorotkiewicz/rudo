@@ -74,33 +74,65 @@ impl DockState {
     }
 
     /// Generate a signature of current dock state for change detection
-    fn items_signature(&self) -> Vec<(String, bool, u32)> {
-        let capacity = self.pins.len() + self.windows.len() + self.launching.len();
-        let mut sig = Vec::with_capacity(capacity);
+    fn items_changed(&self, previous: &[(String, bool, u32)]) -> bool {
+        let mut prev_iter = previous.iter();
 
-        sig.extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
+        for id in &self.pins {
+            let key = format!("pin:{id}");
+            match prev_iter.next() {
+                Some((k, false, 0)) if k == &key => {}
+                _ => return true,
+            }
+        }
 
-        sig.extend(self.windows.iter().map(|w| {
+        for w in &self.windows {
             let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
-            (key, w.active, w.badge_count.unwrap_or(0))
-        }));
+            match prev_iter.next() {
+                Some((k, active, badge))
+                    if k == &key && *active == w.active && *badge == w.badge_count.unwrap_or(0) => {
+                }
+                _ => return true,
+            }
+        }
 
-        sig.extend(
+        for id in self.launching.keys() {
+            let key = format!("launch:{id}");
+            match prev_iter.next() {
+                Some((k, false, 0)) if k == &key => {}
+                _ => return true,
+            }
+        }
+
+        prev_iter.next().is_some()
+    }
+
+    fn update_signature(&mut self) {
+        let capacity = self.pins.len() + self.windows.len() + self.launching.len();
+        self.last_rendered_items = Vec::with_capacity(capacity);
+
+        self.last_rendered_items
+            .extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
+
+        self.last_rendered_items
+            .extend(self.windows.iter().map(|w| {
+                let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
+                (key, w.active, w.badge_count.unwrap_or(0))
+            }));
+
+        self.last_rendered_items.extend(
             self.launching
                 .keys()
                 .map(|id| (format!("launch:{id}"), false, 0)),
         );
-
-        sig
     }
 
     fn needs_render(&mut self) -> bool {
-        let current = self.items_signature();
-        let changed = current != self.last_rendered_items;
-        if changed {
-            self.last_rendered_items = current;
+        if self.items_changed(&self.last_rendered_items) {
+            self.update_signature();
+            true
+        } else {
+            false
         }
-        changed
     }
 }
 
