@@ -149,6 +149,15 @@ When supported by your compositor, rudo displays unread notification counts (bad
 
 </details>
 
+## Autostart (niri)
+
+Add to your niri config:
+
+```kdl
+// ~/.config/niri/config.kdl
+spawn-at-startup "rudo"
+```
+
 ## Development
 
 ```sh
