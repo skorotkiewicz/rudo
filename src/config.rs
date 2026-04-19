@@ -191,8 +191,11 @@ pub fn load_style_css() -> Option<String> {
     fs::read_to_string(path).ok()
 }
 
-fn ensure_style_css_inner() -> Result<(), ConfigError> {
-    let Some(path) = style_path() else {
+fn ensure_file_with_content(
+    path: Option<PathBuf>,
+    content: impl AsRef<[u8]>,
+) -> Result<(), ConfigError> {
+    let Some(path) = path else {
         return Err(ConfigError::ConfigDirNotFound);
     };
 
@@ -204,26 +207,19 @@ fn ensure_style_css_inner() -> Result<(), ConfigError> {
         fs::create_dir_all(parent)?;
     }
 
-    fs::write(path, DEFAULT_STYLE_CSS)?;
+    fs::write(path, content)?;
     Ok(())
 }
 
+fn ensure_style_css_inner() -> Result<(), ConfigError> {
+    ensure_file_with_content(style_path(), DEFAULT_STYLE_CSS)
+}
+
 fn ensure_settings_inner() -> Result<(), ConfigError> {
-    let Some(path) = settings_path() else {
-        return Err(ConfigError::ConfigDirNotFound);
-    };
-
-    if path.exists() {
-        return Ok(());
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let contents = serde_json::to_string_pretty(&Settings::default())?;
-    fs::write(path, contents)?;
-    Ok(())
+    ensure_file_with_content(
+        settings_path(),
+        serde_json::to_string_pretty(&Settings::default())?,
+    )
 }
 
 pub fn config_dir() -> Option<PathBuf> {
@@ -232,15 +228,15 @@ pub fn config_dir() -> Option<PathBuf> {
 }
 
 pub fn pins_path() -> Option<PathBuf> {
-    Some(config_dir()?.join("pins.json"))
+    config_dir().map(|dir| dir.join("pins.json"))
 }
 
 pub fn style_path() -> Option<PathBuf> {
-    Some(config_dir()?.join("style.css"))
+    config_dir().map(|dir| dir.join("style.css"))
 }
 
 pub fn settings_path() -> Option<PathBuf> {
-    Some(config_dir()?.join("settings.json"))
+    config_dir().map(|dir| dir.join("settings.json"))
 }
 
 const DEFAULT_STYLE_CSS: &str = r#"/* Rudo user overrides

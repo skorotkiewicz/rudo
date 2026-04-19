@@ -5,6 +5,14 @@ use gtk4::gio;
 use gtk4::gio::prelude::*;
 use gtk4::glib;
 
+/// Match quality for search ranking (lower = better match)
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchQuality {
+    Exact = 0,
+    Prefix = 1,
+    Fuzzy = 2,
+}
+
 #[derive(Clone)]
 pub struct AppRecord {
     pub id: String,
@@ -123,10 +131,7 @@ impl AppCatalog {
         }
 
         let normalized_query = normalize_key(query);
-
-        let mut exact = Vec::new();
-        let mut prefix = Vec::new();
-        let mut fuzzy = Vec::new();
+        let mut results: Vec<(MatchQuality, AppRecord)> = Vec::new();
 
         for id in &self.ordered_ids {
             if exclude_ids.contains(id) {
@@ -137,28 +142,29 @@ impl AppCatalog {
                 continue;
             };
 
-            // Use pre-normalized search keys - much faster
-            if app.search_keys.iter().any(|key| key == &normalized_query) {
-                exact.push(app.clone());
-            } else if app
-                .search_keys
-                .iter()
-                .any(|key| key.starts_with(&normalized_query))
-            {
-                prefix.push(app.clone());
-            } else if app
-                .search_keys
-                .iter()
-                .any(|key| key.contains(&normalized_query))
-            {
-                fuzzy.push(app.clone());
+            // Determine match quality using pre-normalized search keys
+            let quality = app.search_keys.iter().find_map(|key| {
+                if key == &normalized_query {
+                    Some(MatchQuality::Exact)
+                } else if key.starts_with(&normalized_query) {
+                    Some(MatchQuality::Prefix)
+                } else if key.contains(&normalized_query) {
+                    Some(MatchQuality::Fuzzy)
+                } else {
+                    None
+                }
+            });
+
+            if let Some(q) = quality {
+                results.push((q, app.clone()));
             }
         }
 
-        exact
+        // Sort by match quality (lower ordinal = better match)
+        results.sort_by_key(|(q, _)| *q);
+        results
             .into_iter()
-            .chain(prefix)
-            .chain(fuzzy)
+            .map(|(_, app)| app)
             .take(limit)
             .collect()
     }

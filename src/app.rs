@@ -43,7 +43,7 @@ struct DockState {
     backend: Option<BackendController>,
     launching: HashMap<String, Instant>,
     icon_size: i32,
-    last_rendered_items: Vec<String>,
+    last_rendered_items: Vec<(String, bool, u32)>,
     group_by_output: bool,
 }
 
@@ -74,31 +74,25 @@ impl DockState {
     }
 
     /// Generate a signature of current dock state for change detection
-    fn items_signature(&self) -> Vec<String> {
-        let mut sig =
-            Vec::with_capacity(self.pins.len() + self.windows.len() + self.launching.len());
+    fn items_signature(&self) -> Vec<(String, bool, u32)> {
+        let capacity = self.pins.len() + self.windows.len() + self.launching.len();
+        let mut sig = Vec::with_capacity(capacity);
 
-        // Add pins
-        for pin in &self.pins {
-            sig.push(format!("pin:{pin}"));
-        }
+        // Pins: (id, false, 0) - pins don't have active/badge state
+        sig.extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
 
-        // Add windows with their active state and badge count
-        for window in &self.windows {
-            let key = format!(
-                "{}:{}:{}:{}",
-                window.id,
-                window.app_id.as_deref().unwrap_or(""),
-                if window.active { "active" } else { "inactive" },
-                window.badge_count.unwrap_or(0)
-            );
-            sig.push(key);
-        }
+        // Windows: (key, active, badge_count)
+        sig.extend(self.windows.iter().map(|w| {
+            let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
+            (key, w.active, w.badge_count.unwrap_or(0))
+        }));
 
-        // Add launching apps
-        for app_id in self.launching.keys() {
-            sig.push(format!("launching:{app_id}"));
-        }
+        // Launching apps: (id, false, 0) - tracked separately from windows
+        sig.extend(
+            self.launching
+                .keys()
+                .map(|id| (format!("launch:{id}"), false, 0)),
+        );
 
         sig
     }
@@ -133,16 +127,47 @@ impl AutoHideState {
     }
 }
 
+/// Tracks file changes with debounce to avoid processing incomplete writes
+struct FileDebouncer {
+    mtime: Option<SystemTime>,
+    change_counter: u8,
+}
+
+impl FileDebouncer {
+    fn new(mtime: Option<SystemTime>) -> Self {
+        Self {
+            mtime,
+            change_counter: 0,
+        }
+    }
+
+    /// Check if file has changed and debounce threshold is met
+    /// Returns true when stable change is detected (~1.4s after mtime stops changing)
+    fn check_stable(&mut self, current_mtime: Option<SystemTime>) -> bool {
+        if current_mtime != self.mtime {
+            // File changed, reset debounce
+            self.mtime = current_mtime;
+            self.change_counter = self.change_counter.saturating_add(1);
+            false
+        } else if self.change_counter > 0 {
+            // Mtime stable, increment toward threshold
+            self.change_counter = self.change_counter.saturating_add(1);
+            if self.change_counter >= 2 {
+                self.change_counter = 0;
+                return true;
+            }
+            false
+        } else {
+            false
+        }
+    }
+}
+
 struct ConfigWatchState {
-    pins_mtime: Option<SystemTime>,
-    settings_mtime: Option<SystemTime>,
-    style_mtime: Option<SystemTime>,
-    settings: config::Settings,
-    // Debounce counters to avoid processing incomplete writes
-    pins_change_counter: u8,
-    settings_change_counter: u8,
-    style_change_counter: u8,
-    // Track content hashes to avoid unnecessary parsing
+    pins: FileDebouncer,
+    settings: FileDebouncer,
+    style: FileDebouncer,
+    current_settings: config::Settings,
     pins_content_hash: u64,
 }
 
@@ -206,13 +231,10 @@ impl DockLayout {
 impl ConfigWatchState {
     fn new(settings: config::Settings) -> Self {
         Self {
-            pins_mtime: modified_time(config::pins_path().as_deref()),
-            settings_mtime: modified_time(config::settings_path().as_deref()),
-            style_mtime: modified_time(config::style_path().as_deref()),
-            settings,
-            pins_change_counter: 0,
-            settings_change_counter: 0,
-            style_change_counter: 0,
+            pins: FileDebouncer::new(modified_time(config::pins_path().as_deref())),
+            settings: FileDebouncer::new(modified_time(config::settings_path().as_deref())),
+            style: FileDebouncer::new(modified_time(config::style_path().as_deref())),
+            current_settings: settings,
             pins_content_hash: 0,
         }
     }
@@ -310,13 +332,12 @@ fn build_ui(app: &gtk::Application) {
     picker_popover.set_child(Some(&picker_layout));
 
     // Build menu button if enabled
-    let menu_button = if settings.menu.enabled {
-        Some(build_menu_button(&settings.menu, settings.icon_size))
-    } else {
-        None
-    };
+    let menu_button = settings
+        .menu
+        .enabled
+        .then(|| build_menu_button(&settings.menu, settings.icon_size));
 
-    // Add widgets to dock surface based on menu position
+    // Add menu button at start position if configured
     if let Some(ref menu) = menu_button
         && settings.menu.position == config::MenuPosition::Start
     {
@@ -325,6 +346,7 @@ fn build_ui(app: &gtk::Application) {
 
     dock_surface.append(&items_box);
 
+    // Add menu button at end position if configured
     if let Some(ref menu) = menu_button
         && settings.menu.position == config::MenuPosition::End
     {
@@ -455,64 +477,44 @@ fn build_ui(app: &gtk::Application) {
             {
                 let mut watch = config_watch.borrow_mut();
 
-                // Debounce pins changes - wait for mtime to stabilize
-                let pins_mtime = modified_time(config::pins_path().as_deref());
-                if pins_mtime != watch.pins_mtime {
-                    watch.pins_mtime = pins_mtime;
-                    watch.pins_change_counter = watch.pins_change_counter.saturating_add(1);
-                } else if watch.pins_change_counter > 0 {
-                    // Mtime stable, process if debounce threshold met
-                    watch.pins_change_counter += 1;
-                    if watch.pins_change_counter >= 2 {
-                        // ~1.4s delay for debounce
-                        watch.pins_change_counter = 0;
+                // Check pins changes with debounce
+                if watch
+                    .pins
+                    .check_stable(modified_time(config::pins_path().as_deref()))
+                {
+                    let mut dock_state = state.borrow_mut();
+                    let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
+                    let new_hash = hash_pins(&pins);
 
-                        let mut dock_state = state.borrow_mut();
-                        let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
-                        let new_hash = hash_pins(&pins);
-
-                        // Only process if content actually changed
-                        if new_hash != watch.pins_content_hash || dock_state.pins != pins {
-                            watch.pins_content_hash = new_hash;
-                            dock_state.pins = pins.clone();
-                            config::save_pins(&pins);
-                            rerender = true;
-                        }
-                    }
-                }
-
-                // Debounce settings changes
-                let settings_mtime = modified_time(config::settings_path().as_deref());
-                if settings_mtime != watch.settings_mtime {
-                    watch.settings_mtime = settings_mtime;
-                    watch.settings_change_counter = watch.settings_change_counter.saturating_add(1);
-                } else if watch.settings_change_counter > 0 {
-                    watch.settings_change_counter += 1;
-                    if watch.settings_change_counter >= 2 {
-                        watch.settings_change_counter = 0;
-
-                        let new_settings = config::load_settings();
-                        if new_settings != watch.settings {
-                            watch.settings = new_settings.clone();
-                            settings_to_apply = Some(new_settings);
-                        }
-                    }
-                }
-
-                // Debounce style changes
-                let style_mtime = modified_time(config::style_path().as_deref());
-                if style_mtime != watch.style_mtime {
-                    watch.style_mtime = style_mtime;
-                    watch.style_change_counter = watch.style_change_counter.saturating_add(1);
-                } else if watch.style_change_counter > 0 {
-                    watch.style_change_counter += 1;
-                    if watch.style_change_counter >= 2 {
-                        watch.style_change_counter = 0;
-                        if let Some(provider) = user_css_provider.as_ref() {
-                            provider.load_from_data(&config::load_style_css().unwrap_or_default());
-                        }
+                    if new_hash != watch.pins_content_hash || dock_state.pins != pins {
+                        watch.pins_content_hash = new_hash;
+                        dock_state.pins = pins.clone();
+                        config::save_pins(&pins);
                         rerender = true;
                     }
+                }
+
+                // Check settings changes with debounce
+                if watch
+                    .settings
+                    .check_stable(modified_time(config::settings_path().as_deref()))
+                {
+                    let new_settings = config::load_settings();
+                    if new_settings != watch.current_settings {
+                        watch.current_settings = new_settings.clone();
+                        settings_to_apply = Some(new_settings);
+                    }
+                }
+
+                // Check style changes with debounce
+                if watch
+                    .style
+                    .check_stable(modified_time(config::style_path().as_deref()))
+                {
+                    if let Some(provider) = user_css_provider.as_ref() {
+                        provider.load_from_data(&config::load_style_css().unwrap_or_default());
+                    }
+                    rerender = true;
                 }
             }
 
