@@ -143,6 +143,8 @@ fn publish_snapshot(event_tx: &Sender<BackendEvent>, windows: &BTreeMap<u64, Win
             title: window.title.clone(),
             active: window.is_focused,
             badge_count: None, // Niri doesn't support badge notifications yet
+            output_id: None,   // Niri doesn't provide output info yet
+            coordinates: None, // Niri doesn't provide window coordinates yet
         })
         .collect();
     let _ = event_tx.send(BackendEvent::Snapshot(snapshot));

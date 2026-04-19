@@ -44,6 +44,7 @@ struct DockState {
     launching: HashMap<String, Instant>,
     icon_size: i32,
     last_rendered_items: Vec<String>,
+    group_by_output: bool,
 }
 
 impl DockState {
@@ -240,6 +241,7 @@ fn build_ui(app: &gtk::Application) {
         launching: HashMap::new(),
         icon_size: settings.icon_size,
         last_rendered_items: Vec::new(),
+        group_by_output: settings.group_by_output,
     }));
 
     let window = gtk::ApplicationWindow::builder()
@@ -307,7 +309,28 @@ fn build_ui(app: &gtk::Application) {
     picker_layout.append(&picker_scroll);
     picker_popover.set_child(Some(&picker_layout));
 
+    // Build menu button if enabled
+    let menu_button = if settings.menu.enabled {
+        Some(build_menu_button(&settings.menu, settings.icon_size))
+    } else {
+        None
+    };
+
+    // Add widgets to dock surface based on menu position
+    if let Some(ref menu) = menu_button
+        && settings.menu.position == config::MenuPosition::Start
+    {
+        dock_surface.append(&menu.button);
+    }
+
     dock_surface.append(&items_box);
+
+    if let Some(ref menu) = menu_button
+        && settings.menu.position == config::MenuPosition::End
+    {
+        dock_surface.append(&menu.button);
+    }
+
     dock_surface.append(&picker_button);
     dock_revealer.set_child(Some(&dock_surface));
     outer.append(&dock_revealer);
@@ -340,6 +363,11 @@ fn build_ui(app: &gtk::Application) {
     )));
     apply_autohide_settings(&window, &hover_strip, &autohide, &settings);
     install_autohide_hover(&picker_popover, &autohide);
+
+    if let Some(ref menu) = menu_button {
+        install_autohide_hover(&menu.popover, &autohide);
+    }
+
     let config_watch = Rc::new(RefCell::new(ConfigWatchState::new(settings.clone())));
 
     {
@@ -507,6 +535,152 @@ fn build_ui(app: &gtk::Application) {
 
     schedule_hide(&autohide);
 
+    window.present();
+}
+
+/// Menu button with its popover for dock actions
+#[allow(dead_code)]
+struct MenuButton {
+    button: gtk::Button,
+    popover: gtk::Popover,
+}
+
+/// Build a menu button with configurable items
+fn build_menu_button(config: &config::MenuConfig, icon_size: i32) -> MenuButton {
+    let button = gtk::Button::new();
+    button.add_css_class("dock-item");
+    button.add_css_class("menu-button");
+    button.set_tooltip_text(Some("Menu"));
+    button.set_child(Some(&icon_from_name(&config.icon, icon_size)));
+
+    let popover = gtk::Popover::new();
+    popover.set_has_arrow(false);
+    popover.set_position(gtk::PositionType::Top);
+    popover.set_parent(&button);
+
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    layout.add_css_class("dock-menu");
+    layout.set_margin_top(6);
+    layout.set_margin_bottom(6);
+    layout.set_margin_start(6);
+    layout.set_margin_end(6);
+
+    for item in &config.items {
+        let menu_item = gtk::Button::new();
+        menu_item.add_css_class("dock-menu-item");
+
+        // Build menu item content with optional icon
+        let item_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        if let Some(ref icon_name) = item.icon {
+            let icon = icon_from_name(icon_name, 16);
+            item_box.append(&icon);
+        }
+        let label = gtk::Label::new(Some(&item.label));
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        item_box.append(&label);
+
+        menu_item.set_child(Some(&item_box));
+
+        // Clone item data for closure
+        let command = item.command.clone();
+        let confirm = item.confirm;
+        let label_text = item.label.clone();
+
+        menu_item.connect_clicked(glib::clone!(
+            #[weak]
+            popover,
+            move |_| {
+                popover.popdown();
+                if confirm {
+                    show_confirmation_dialog(&label_text, &command, &popover);
+                } else {
+                    execute_command(&command);
+                }
+            }
+        ));
+
+        layout.append(&menu_item);
+    }
+
+    popover.set_child(Some(&layout));
+
+    // Connect button click to show popover
+    let popover_clone = popover.clone();
+    button.connect_clicked(move |_| {
+        popover_clone.popup();
+    });
+
+    MenuButton { button, popover }
+}
+
+/// Create an icon widget from an icon name
+fn icon_from_name(icon_name: &str, icon_size: i32) -> gtk::Image {
+    let image = gtk::Image::from_icon_name(icon_name);
+    image.set_pixel_size(icon_size);
+    image
+}
+
+/// Execute a shell command
+fn execute_command(command: &str) {
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .spawn()
+        .map_err(|e| eprintln!("Failed to execute command '{}': {}", command, e));
+}
+
+/// Show a confirmation dialog before executing command
+fn show_confirmation_dialog(label: &str, command: &str, parent: &impl IsA<gtk::Widget>) {
+    let window = gtk::Window::new();
+    window.set_title(Some(&format!("Confirm {}", label)));
+    window.set_default_width(300);
+    window.set_default_height(120);
+    window.set_modal(true);
+    window.set_transient_for(parent.root().and_downcast_ref::<gtk::Window>());
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(18);
+    content.set_margin_bottom(18);
+    content.set_margin_start(18);
+    content.set_margin_end(18);
+
+    let message = gtk::Label::new(Some(&format!(
+        "Are you sure you want to {}?",
+        label.to_lowercase()
+    )));
+    content.append(&message);
+
+    let button_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    button_box.set_halign(gtk::Align::End);
+    button_box.set_hexpand(true);
+
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| {
+            window.close();
+        }
+    ));
+
+    let confirm = gtk::Button::with_label(label);
+    confirm.add_css_class("destructive-action");
+    let cmd = command.to_string();
+    confirm.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| {
+            execute_command(&cmd);
+            window.close();
+        }
+    ));
+
+    button_box.append(&cancel);
+    button_box.append(&confirm);
+    content.append(&button_box);
+
+    window.set_child(Some(&content));
     window.present();
 }
 
@@ -902,6 +1076,14 @@ fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::Box, query: 
 }
 
 fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
+    if state.group_by_output {
+        collect_items_by_output(state)
+    } else {
+        collect_items_flat(state)
+    }
+}
+
+fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
     let mut known = BTreeMap::<String, Vec<WindowState>>::new();
     let mut unknown = BTreeMap::<String, Vec<WindowState>>::new();
 
@@ -947,6 +1129,90 @@ fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
     unknown_items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
 
     running.extend(unknown_items);
+    (pinned, running)
+}
+
+fn collect_items_by_output(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
+    // Type alias for output grouping: (known apps, unknown apps)
+    type OutputGroup = (
+        BTreeMap<String, Vec<WindowState>>,
+        BTreeMap<String, Vec<WindowState>>,
+    );
+
+    // Group windows by output ID
+    let mut by_output: BTreeMap<Option<u32>, OutputGroup> = BTreeMap::new();
+
+    for window in &state.windows {
+        let output_id = window.output_id;
+        let entry = by_output.entry(output_id).or_default();
+
+        if let Some(app) = state.catalog.resolve(window.app_id.as_deref()) {
+            entry.0.entry(app.id).or_default().push(window.clone());
+        } else {
+            let key = window
+                .app_id
+                .clone()
+                .or_else(|| window.title.clone())
+                .unwrap_or_else(|| window.id.clone());
+            entry.1.entry(key).or_default().push(window.clone());
+        }
+    }
+
+    // Collect pinned items (all pins appear first, regardless of output)
+    let pinned = state
+        .pins
+        .iter()
+        .filter_map(|id| {
+            let app = state.catalog.app(id)?;
+            // Find windows for this app across all outputs
+            let windows: Vec<WindowState> = by_output
+                .values()
+                .flat_map(|(known, _)| known.get(id).cloned().unwrap_or_default())
+                .collect();
+            let launching = state.is_launching(&app.id);
+            Some(build_known_item(app, windows, true, launching))
+        })
+        .collect::<Vec<_>>();
+
+    // Collect running items grouped by output, sorted by coordinates within each output
+    let mut running = Vec::new();
+
+    for (_output_id, (known, unknown)) in by_output {
+        // Collect known apps for this output
+        let mut output_items: Vec<DockItem> = known
+            .into_iter()
+            .filter_map(|(id, windows)| {
+                let app = state.catalog.app(&id)?;
+                let launching = state.is_launching(&app.id);
+                Some(build_known_item(app, windows, false, launching))
+            })
+            .collect();
+
+        // Collect unknown apps for this output
+        let mut unknown_items: Vec<DockItem> = unknown
+            .into_iter()
+            .map(|(label, windows)| build_unknown_item(label, windows))
+            .collect();
+
+        // Sort items by coordinates (top-to-bottom, left-to-right)
+        let sort_key = |item: &DockItem| {
+            let coords = item
+                .windows
+                .first()
+                .and_then(|w| w.coordinates)
+                .unwrap_or((0, 0));
+            (coords.1, coords.0) // Sort by y first, then x
+        };
+        output_items.sort_by_key(sort_key);
+        unknown_items.sort_by_key(sort_key);
+
+        running.extend(output_items);
+        running.extend(unknown_items);
+    }
+
+    // Sort by activity within the output groups
+    running.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
+
     (pinned, running)
 }
 
@@ -1432,6 +1698,37 @@ const CSS: &str = r#"
     font-size: 11px;
     font-weight: 700;
     color: white;
+}
+
+.dock-menu {
+    padding: 6px;
+}
+
+.dock-menu-item {
+    padding: 10px 14px;
+    border-radius: 14px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.dock-menu-item:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.menu-button {
+    min-width: 46px;
+    min-height: 46px;
+    padding: 0;
+    border-radius: 16px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: none;
+}
+
+.menu-button:hover {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(255, 255, 255, 0.12);
 }
 
 .dock-separator {
