@@ -107,7 +107,8 @@ fn default_menu_items() -> Vec<MenuItem> {
         (
             "Lock",
             "system-lock-screen-symbolic",
-            "loginctl lock-session",
+            "swaylock -f",
+            // "loginctl lock-session",
             false,
         ),
         (
