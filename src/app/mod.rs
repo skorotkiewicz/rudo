@@ -517,7 +517,7 @@ fn build_pinned_items(
         .pins
         .iter()
         .filter_map(|id| {
-            let app = state.catalog.app(id)?;
+            let app = state.catalog.app(id)?.clone();
             let windows = known.remove(id).unwrap_or_default();
             let launching = state.is_launching(&app.id);
             Some(build_known_item(app, windows, true, launching))
@@ -532,16 +532,12 @@ fn build_running_items(
     let mut items: Vec<_> = known
         .into_iter()
         .filter_map(|(id, windows)| {
-            let app = state.catalog.app(&id)?;
+            let app = state.catalog.app(&id)?.clone();
             let launching = state.is_launching(&app.id);
             Some(build_known_item(app, windows, false, launching))
         })
         .collect();
-    items.sort_by(|a, b| {
-        let a_key = (!a.active, a.label.to_lowercase());
-        let b_key = (!b.active, b.label.to_lowercase());
-        a_key.cmp(&b_key)
-    });
+    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
     items
 }
 
@@ -550,11 +546,7 @@ fn build_unknown_items(unknown: BTreeMap<String, Vec<WindowState>>) -> Vec<DockI
         .into_iter()
         .map(|(label, windows)| build_unknown_item(label, windows))
         .collect();
-    items.sort_by(|a, b| {
-        let a_key = (!a.active, a.label.to_lowercase());
-        let b_key = (!b.active, b.label.to_lowercase());
-        a_key.cmp(&b_key)
-    });
+    items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
     items
 }
 

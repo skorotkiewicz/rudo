@@ -89,12 +89,17 @@ impl AppCatalog {
         }
     }
 
-    pub fn app(&self, id: &str) -> Option<AppRecord> {
+    pub fn app(&self, id: &str) -> Option<&AppRecord> {
         let canonical = self.resolve_id(id)?;
-        self.apps.get(&canonical).cloned()
+        self.apps.get(&canonical)
     }
 
-    pub fn search(&self, query: &str, limit: usize, exclude_ids: &HashSet<&str>) -> Vec<AppRecord> {
+    pub fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        exclude_ids: &HashSet<&str>,
+    ) -> Vec<&AppRecord> {
         if query.is_empty() {
             return self
                 .ordered_ids
@@ -102,12 +107,11 @@ impl AppCatalog {
                 .filter(|id| !exclude_ids.contains(id.as_str()))
                 .filter_map(|id| self.apps.get(id))
                 .take(limit)
-                .cloned()
                 .collect();
         }
 
         let normalized_query = normalize_key(query);
-        let mut results: Vec<(MatchQuality, AppRecord)> = Vec::new();
+        let mut results: Vec<(MatchQuality, &AppRecord)> = Vec::new();
 
         for id in &self.ordered_ids {
             if exclude_ids.contains(id.as_str()) {
@@ -131,7 +135,7 @@ impl AppCatalog {
             });
 
             if let Some(q) = quality {
-                results.push((q, app.clone()));
+                results.push((q, app));
             }
         }
 
@@ -148,6 +152,11 @@ impl AppCatalog {
             return Some(raw.to_string());
         }
 
+        // Fast path: check aliases without allocation first
+        if let Some(id) = self.aliases.get(raw) {
+            return Some(id.clone());
+        }
+
         let desktop_id = if raw.ends_with(".desktop") {
             raw.to_string()
         } else {
@@ -158,6 +167,7 @@ impl AppCatalog {
             return Some(desktop_id);
         }
 
+        // Check aliases with normalized key
         self.aliases.get(&normalize_key(raw)).cloned()
     }
 }

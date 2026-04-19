@@ -14,7 +14,13 @@ pub(crate) fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::B
 
     let borrow = state.borrow();
     let exclude: HashSet<&str> = borrow.pins.iter().map(|s| s.as_str()).collect();
-    let matches = borrow.catalog.search(query, 40, &exclude);
+    let icon_size = borrow.icon_size;
+    let matches: Vec<_> = borrow
+        .catalog
+        .search(query, 40, &exclude)
+        .into_iter()
+        .cloned()
+        .collect();
     drop(borrow);
 
     if matches.is_empty() {
@@ -29,7 +35,6 @@ pub(crate) fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::B
         row_button.add_css_class("picker-row");
 
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-        let icon_size = state.borrow().icon_size;
         let icon = icon_widget(Some(&app), icon_size);
         let text = gtk::Box::new(gtk::Orientation::Vertical, 2);
         let title = gtk::Label::new(Some(&app.name));
@@ -47,7 +52,6 @@ pub(crate) fn render_picker(state: &Rc<RefCell<DockState>>, picker_list: &gtk::B
         {
             let state = Rc::clone(state);
             let picker_list = picker_list.clone();
-            let app = app.clone();
             row_button.connect_clicked(move |_| {
                 let mut dock_state = state.borrow_mut();
                 if !dock_state.pins.iter().any(|pin| pin == &app.id) {
