@@ -120,7 +120,7 @@ Default `settings.json`:
 Configure a power menu or custom actions via the `menu` section:
 
 - **enabled**: Show/hide the menu button
-- **icon**: Icon name for the menu button (default: `system-shutdown-symbolic`)
+- **icon**: Icon name for the menu button (default: `system-lock-screen-symbolic`)
 - **position**: `"start"` (before pins) or `"end"` (after running apps)
 - **items**: Array of menu items with `label`, `command`, optional `icon`, and `confirm` flag
 

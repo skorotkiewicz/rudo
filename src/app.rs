@@ -78,16 +78,13 @@ impl DockState {
         let capacity = self.pins.len() + self.windows.len() + self.launching.len();
         let mut sig = Vec::with_capacity(capacity);
 
-        // Pins: (id, false, 0) - pins don't have active/badge state
         sig.extend(self.pins.iter().map(|id| (format!("pin:{id}"), false, 0)));
 
-        // Windows: (key, active, badge_count)
         sig.extend(self.windows.iter().map(|w| {
             let key = format!("{}:{}", w.id, w.app_id.as_deref().unwrap_or(""));
             (key, w.active, w.badge_count.unwrap_or(0))
         }));
 
-        // Launching apps: (id, false, 0) - tracked separately from windows
         sig.extend(
             self.launching
                 .keys()
@@ -97,15 +94,13 @@ impl DockState {
         sig
     }
 
-    /// Check if dock needs re-rendering based on state changes
     fn needs_render(&mut self) -> bool {
         let current = self.items_signature();
-        if current != self.last_rendered_items {
+        let changed = current != self.last_rendered_items;
+        if changed {
             self.last_rendered_items = current;
-            true
-        } else {
-            false
         }
+        changed
     }
 }
 
@@ -127,39 +122,31 @@ impl AutoHideState {
     }
 }
 
-/// Tracks file changes with debounce to avoid processing incomplete writes
+/// Debounces file changes — returns true once after mtime stabilizes for 2 checks
 struct FileDebouncer {
     mtime: Option<SystemTime>,
-    change_counter: u8,
+    stable_checks: u8,
 }
 
 impl FileDebouncer {
     fn new(mtime: Option<SystemTime>) -> Self {
         Self {
             mtime,
-            change_counter: 0,
+            stable_checks: 0,
         }
     }
 
-    /// Check if file has changed and debounce threshold is met
-    /// Returns true when stable change is detected (~1.4s after mtime stops changing)
     fn check_stable(&mut self, current_mtime: Option<SystemTime>) -> bool {
         if current_mtime != self.mtime {
-            // File changed, reset debounce
             self.mtime = current_mtime;
-            self.change_counter = self.change_counter.saturating_add(1);
-            false
-        } else if self.change_counter > 0 {
-            // Mtime stable, increment toward threshold
-            self.change_counter = self.change_counter.saturating_add(1);
-            if self.change_counter >= 2 {
-                self.change_counter = 0;
-                return true;
-            }
-            false
-        } else {
-            false
+            self.stable_checks = 0;
         }
+        self.stable_checks = self.stable_checks.saturating_add(1);
+        if self.stable_checks >= 2 {
+            self.stable_checks = 0;
+            return true;
+        }
+        false
     }
 }
 
@@ -540,8 +527,6 @@ fn build_ui(app: &gtk::Application) {
     window.present();
 }
 
-/// Menu button with its popover for dock actions
-#[allow(dead_code)]
 struct MenuButton {
     button: gtk::Button,
     popover: gtk::Popover,
@@ -1565,19 +1550,11 @@ fn reorder_pins(
 
 fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
-    let mut sanitized = Vec::new();
-
-    for pin in pins {
-        let Some(app) = catalog.app(&pin) else {
-            continue;
-        };
-
-        if seen.insert(app.id.clone()) {
-            sanitized.push(app.id);
-        }
-    }
-
-    sanitized
+    pins.into_iter()
+        .filter_map(|id| catalog.app(&id))
+        .filter(|app| seen.insert(app.id.clone()))
+        .map(|app| app.id)
+        .collect()
 }
 
 fn window_menu_label(window: &WindowState, multiple: bool) -> String {
@@ -1596,20 +1573,13 @@ fn modified_time(path: Option<&std::path::Path>) -> Option<SystemTime> {
         .and_then(|metadata| metadata.modified().ok())
 }
 
-/// Simple FNV-1a hash for content comparison
 fn hash_pins(pins: &[String]) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
-    let mut hash = FNV_OFFSET;
-    for pin in pins {
-        for &byte in pin.as_bytes() {
-            hash ^= byte as u64;
-            hash = hash.wrapping_mul(FNV_PRIME);
-        }
-        hash ^= 0; // delimiter between pins
-    }
-    hash
+    let mut hasher = DefaultHasher::new();
+    pins.hash(&mut hasher);
+    hasher.finish()
 }
 
 const CSS: &str = r#"
@@ -1693,7 +1663,7 @@ const CSS: &str = r#"
     background: linear-gradient(135deg, #ff4444, #ff2222);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.42);
     margin-top: -2px;
-    margin-end: -2px;
+    margin-right: -2px;
 }
 
 .dock-badge-label {
