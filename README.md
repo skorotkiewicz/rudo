@@ -97,7 +97,7 @@ Default `settings.json`:
   "animation_duration_ms": 220,
   "menu": {
     "enabled": true,
-    "icon": "system-shutdown-symbolic",
+    "icon": "system-lock-screen-symbolic",
     "position": "end",
     "items": [
       {"label": "Lock", "icon": "system-lock-screen-symbolic", "command": "swaylock -f", "confirm": false},

@@ -82,7 +82,7 @@ impl Default for MenuConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            icon: "system-shutdown-symbolic".to_string(),
+            icon: "system-lock-screen-symbolic".to_string(),
             position: MenuPosition::End,
             items: default_menu_items(),
         }
