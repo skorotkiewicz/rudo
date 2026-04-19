@@ -19,11 +19,8 @@ pub struct AppRecord {
     pub name: String,
     pub icon: Option<gio::Icon>,
     #[allow(dead_code)]
-    pub startup_wm_class: Option<String>,
-    #[allow(dead_code)]
     pub executable: Option<String>,
     app_info: gio::AppInfo,
-    // Pre-normalized searchable fields to avoid repeated normalization
     search_keys: Vec<String>,
 }
 
@@ -59,14 +56,9 @@ impl AppCatalog {
 
             let icon = app.icon();
             let executable = basename(app.executable());
-            let startup_wm_class = None;
             let name = app.display_name().to_string();
 
-            // Pre-normalize searchable fields for faster matching
             let mut search_keys = vec![normalize_key(&id), normalize_key(&name)];
-            if let Some(wm_class) = startup_wm_class.as_deref() {
-                search_keys.push(normalize_key(wm_class));
-            }
             if let Some(exec) = executable.as_deref() {
                 search_keys.push(normalize_key(exec));
             }
@@ -75,16 +67,12 @@ impl AppCatalog {
                 id: id.clone(),
                 name,
                 icon,
-                startup_wm_class: startup_wm_class.clone(),
                 executable: executable.clone(),
                 app_info: app,
                 search_keys,
             };
 
             register_alias(&mut aliases, &id, &id);
-            if let Some(wm_class) = startup_wm_class.as_deref() {
-                register_alias(&mut aliases, wm_class, &id);
-            }
             if let Some(exec) = executable.as_deref() {
                 register_alias(&mut aliases, exec, &id);
             }

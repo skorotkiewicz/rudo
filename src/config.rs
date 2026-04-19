@@ -103,32 +103,39 @@ impl Default for MenuConfig {
 }
 
 fn default_menu_items() -> Vec<MenuItem> {
-    vec![
-        MenuItem {
-            label: "Lock".to_string(),
-            icon: Some("system-lock-screen-symbolic".to_string()),
-            command: "loginctl lock-session".to_string(),
-            confirm: false,
-        },
-        MenuItem {
-            label: "Logout".to_string(),
-            icon: Some("system-log-out-symbolic".to_string()),
-            command: "loginctl terminate-user $USER".to_string(),
-            confirm: true,
-        },
-        MenuItem {
-            label: "Restart".to_string(),
-            icon: Some("system-restart-symbolic".to_string()),
-            command: "systemctl reboot".to_string(),
-            confirm: true,
-        },
-        MenuItem {
-            label: "Shutdown".to_string(),
-            icon: Some("system-shutdown-symbolic".to_string()),
-            command: "systemctl poweroff".to_string(),
-            confirm: true,
-        },
+    [
+        (
+            "Lock",
+            "system-lock-screen-symbolic",
+            "loginctl lock-session",
+            false,
+        ),
+        (
+            "Logout",
+            "system-log-out-symbolic",
+            "loginctl terminate-user $USER",
+            true,
+        ),
+        (
+            "Restart",
+            "system-restart-symbolic",
+            "systemctl reboot",
+            true,
+        ),
+        (
+            "Shutdown",
+            "system-shutdown-symbolic",
+            "systemctl poweroff",
+            true,
+        ),
     ]
+    .map(|(label, icon, command, confirm)| MenuItem {
+        label: label.into(),
+        icon: Some(icon.into()),
+        command: command.into(),
+        confirm,
+    })
+    .to_vec()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

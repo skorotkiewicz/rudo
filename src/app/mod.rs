@@ -492,19 +492,25 @@ fn group_windows(
     BTreeMap<String, Vec<WindowState>>,
     BTreeMap<String, Vec<WindowState>>,
 ) {
-    let mut known = BTreeMap::<String, Vec<WindowState>>::new();
-    let mut unknown = BTreeMap::<String, Vec<WindowState>>::new();
+    let mut known = BTreeMap::new();
+    let mut unknown = BTreeMap::new();
 
     for window in windows {
         if let Some(app) = catalog.resolve(window.app_id.as_deref()) {
-            known.entry(app.id).or_default().push(window.clone());
+            known
+                .entry(app.id)
+                .or_insert_with(Vec::new)
+                .push(window.clone());
         } else {
             let key = window
                 .app_id
                 .clone()
                 .or_else(|| window.title.clone())
                 .unwrap_or_else(|| window.id.clone());
-            unknown.entry(key).or_default().push(window.clone());
+            unknown
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(window.clone());
         }
     }
 
@@ -531,23 +537,23 @@ fn build_running_items(
     known: BTreeMap<String, Vec<WindowState>>,
     state: &DockState,
 ) -> Vec<DockItem> {
-    let mut items = known
+    let mut items: Vec<_> = known
         .into_iter()
         .filter_map(|(id, windows)| {
             let app = state.catalog.app(&id)?;
             let launching = state.is_launching(&app.id);
             Some(build_known_item(app, windows, false, launching))
         })
-        .collect::<Vec<_>>();
+        .collect();
     items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
     items
 }
 
 fn build_unknown_items(unknown: BTreeMap<String, Vec<WindowState>>) -> Vec<DockItem> {
-    let mut items = unknown
+    let mut items: Vec<_> = unknown
         .into_iter()
         .map(|(label, windows)| build_unknown_item(label, windows))
-        .collect::<Vec<_>>();
+        .collect();
     items.sort_by_cached_key(|item| (!item.active, item.label.to_lowercase()));
     items
 }
