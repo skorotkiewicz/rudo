@@ -13,12 +13,12 @@ A small, elegant dock for Wayland.
 - Persistent pinned apps
 - Running window tracking
 - Launch feedback to prevent double-click spam
-- **Badge notifications** — unread counts from apps (Discord, Telegram, etc.)
 - **Configurable menu system** — power menu, custom actions, confirmations
-- **Output-based grouping** — group and order windows by monitor/screen
+- **Multi-monitor placement** — show the dock on the first or every connected output
+- Manual `--toggle`, `--show`, and `--hide` commands
 - Optional autohide with hover-to-reveal
 - User theming via CSS
-- User behavior settings via JSON
+- Live-reloading behavior settings via JSON
 
 </details>
 
@@ -34,9 +34,6 @@ A small, elegant dock for Wayland.
 |---------|------|---------------------|
 | Window tracking | ✅ Full | ✅ Full |
 | Activation/close | ✅ Full | ✅ Full |
-| Badge notifications | ❌ Not yet | ⚠️ Limited* |
-
-\* Badge notifications depend on compositor-specific protocol extensions. Most compositors don't currently provide badge counts through the standard protocol.
 
 </details>
 
@@ -62,6 +59,15 @@ Or:
 
 ```sh
 just run
+```
+
+Running `rudo` again shows the existing dock instead of creating another one. Visibility can be
+controlled from scripts or compositor key bindings:
+
+```sh
+rudo --toggle
+rudo --show
+rudo --hide
 ```
 
 ## Install
@@ -93,9 +99,10 @@ Default `settings.json`:
   "show_pin_button": true,
   "icon_size": 24,
   "position": "bottom",
+  "outputs": "first",
   "animation_duration_ms": 220,
   "menu": {
-    "enabled": true,
+    "enabled": false,
     "icon": "system-lock-screen-symbolic",
     "position": "end",
     "items": [
@@ -108,9 +115,14 @@ Default `settings.json`:
 }
 ```
 
-- **position**: `"bottom"`, `"top"`, `"left"`, `"right"` (requires restart)
+- **position**: `"bottom"`, `"top"`, `"left"`, `"right"`
+- **outputs**: `"first"` for one dock or `"all"` for one dock on every connected monitor
 - **icon_size**: Size in pixels (default: 24)
 - **animation_duration_ms**: Show/hide animation in milliseconds (default: 220)
+
+Settings and monitor changes are applied while Rudo is running. Every dock view shares the same
+pins and global window list; filtering windows by their current output is not yet supported by the
+available backends.
 
 <details>
   <summary>Menu System</summary>
@@ -125,18 +137,7 @@ Configure a power menu or custom actions via the `menu` section:
 Set `confirm: true` to show a confirmation dialog before executing destructive commands.
 </details>
 
-<details>
-  <summary>Badge Notifications</summary>
-
-When supported by your compositor, rudo displays unread notification counts (badges) on dock items from apps like Discord, Telegram, etc. Badge counts are aggregated across all windows of the same app.
-
-- Zero-count badges are automatically hidden
-- Counts above 99 display as "99+"
-- Red badge with white text for visibility
-
 `style.css` is loaded on every start after the built-in theme, so you can override the dock without rebuilding.
-
-</details>
 
 ## Autostart (niri)
 
@@ -145,6 +146,10 @@ Add to your niri config:
 ```kdl
 // ~/.config/niri/config.kdl
 spawn-at-startup "rudo"
+
+binds {
+    Mod+D { spawn "rudo" "--toggle"; }
+}
 ```
 
 ## Development
