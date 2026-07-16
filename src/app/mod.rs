@@ -24,15 +24,15 @@ mod dnd;
 mod item;
 mod picker;
 
-pub fn run() {
+pub fn run() -> glib::ExitCode {
     let args = std::env::args().collect::<Vec<_>>();
     if args.iter().any(|arg| arg == "-V" || arg == "--version") {
         println!("rudo {}", env!("CARGO_PKG_VERSION"));
-        return;
+        return glib::ExitCode::SUCCESS;
     }
     if let Err(error) = validate_visibility_args(&args) {
         eprintln!("rudo: {error}");
-        return;
+        return glib::ExitCode::FAILURE;
     }
 
     let app = gtk::Application::builder()
@@ -83,7 +83,7 @@ pub fn run() {
         });
     }
 
-    app.run();
+    app.run()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

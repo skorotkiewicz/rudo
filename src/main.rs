@@ -4,6 +4,6 @@ mod catalog;
 mod config;
 mod model;
 
-fn main() {
-    app::run();
+fn main() -> std::process::ExitCode {
+    app::run().into()
 }
