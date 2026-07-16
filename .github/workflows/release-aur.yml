@@ -30,6 +30,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify source
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets
+
       - name: Derive version
         id: meta
         shell: bash
@@ -38,6 +44,11 @@ jobs:
           version="${ref_name#v}"
           if [[ -z "$version" || "$version" == "$ref_name" ]]; then
             version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          fi
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$version" != "$cargo_version" ]]; then
+            echo "tag version $version does not match Cargo.toml version $cargo_version" >&2
+            exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -49,9 +60,12 @@ jobs:
         shell: bash
         run: |
           version='${{ steps.meta.outputs.version }}'
-          mkdir -p dist
+          mkdir -p dist/bundle
+          install -Dm755 target/release/rudo dist/bundle/rudo
+          install -Dm644 README.md dist/bundle/README.md
+          install -Dm644 LICENSE dist/bundle/LICENSE
           asset_name="rudo-${version}-x86_64-linux.tar.gz"
-          tar -C target/release -czf "dist/${asset_name}" rudo
+          tar -C dist/bundle -czf "dist/${asset_name}" rudo README.md LICENSE
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
 
       - name: Upload workflow artifact
@@ -79,7 +93,7 @@ jobs:
 
   aur-publish:
     runs-on: ubuntu-latest
-    needs: build-release
+    needs: [build-release, publish-github-release]
     container:
       image: archlinux:latest
 
@@ -100,7 +114,9 @@ jobs:
       - name: Generate PKGBUILD dynamically
         run: |
           binary_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${PKGVER}/rudo-${PKGVER}-x86_64-linux.tar.gz"
-          sha256="$(curl -L "$binary_url" | sha256sum | awk '{print $1}')"
+          sha256="$(curl --fail --location --silent --show-error \
+            --retry 5 --retry-delay 2 --retry-all-errors "$binary_url" \
+            | sha256sum | awk '{print $1}')"
 
           bash ./scripts/render-aur-package.sh aur-dist \
             "$PACKAGE_NAME" \
