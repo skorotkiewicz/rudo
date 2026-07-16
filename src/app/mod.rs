@@ -436,7 +436,9 @@ impl AppRuntime {
             })
             .unwrap_or_default();
 
-        if self.settings.borrow().outputs == config::OutputMode::First {
+        if self.settings.borrow().outputs == config::OutputMode::First
+            || !gtk4_layer_shell::is_supported()
+        {
             monitors.truncate(1);
         }
         if monitors.is_empty() {
@@ -473,6 +475,8 @@ impl AppRuntime {
 
         let old_views = self.views.replace(new_views);
         for view in old_views {
+            autohide::cancel_pending_hide(&view.ctx.autohide);
+            clear_children(&view.ctx.items_box);
             view.window.close();
         }
     }
@@ -640,29 +644,44 @@ fn build_view(
     }
 
     {
-        let ctx = ctx.clone();
+        let state = Rc::clone(&state);
+        let picker_list = picker_list.clone();
+        let picker_search = picker_search.clone();
         let picker_popover = picker_popover.clone();
-        let window_for_open = window.clone();
+        let window_for_open = window.downgrade();
+        let contexts = ctx.contexts.clone();
         picker_button.connect_clicked(move |_| {
-            window_for_open.set_keyboard_mode(KeyboardMode::OnDemand);
-            ctx.picker_search.set_text("");
-            picker::render_picker(&ctx, "");
+            if let Some(window) = window_for_open.upgrade() {
+                window.set_keyboard_mode(KeyboardMode::OnDemand);
+            }
+            picker_search.set_text("");
+            picker::render_picker(&state, &picker_list, &picker_search, &contexts, "");
             picker_popover.popup();
-            ctx.picker_search.grab_focus();
+            picker_search.grab_focus();
         });
     }
 
     {
-        let ctx = ctx.clone();
+        let state = Rc::clone(&state);
+        let picker_list = picker_list.clone();
+        let contexts = ctx.contexts.clone();
         picker_search.connect_search_changed(move |entry| {
-            picker::render_picker(&ctx, entry.text().as_ref());
+            picker::render_picker(
+                &state,
+                &picker_list,
+                entry,
+                &contexts,
+                entry.text().as_ref(),
+            );
         });
     }
 
     {
-        let window_for_close = window.clone();
+        let window_for_close = window.downgrade();
         picker_popover.connect_closed(move |_| {
-            window_for_close.set_keyboard_mode(KeyboardMode::None);
+            if let Some(window) = window_for_close.upgrade() {
+                window.set_keyboard_mode(KeyboardMode::None);
+            }
         });
     }
 
@@ -679,6 +698,12 @@ pub(crate) fn render_all(ctx: &RenderContext) {
         render_contexts(&contexts);
     } else {
         render_dock(ctx);
+    }
+}
+
+pub(crate) fn render_registered(contexts: &Weak<RefCell<Vec<RenderContext>>>) {
+    if let Some(contexts) = contexts.upgrade() {
+        render_contexts(&contexts);
     }
 }
 
@@ -739,7 +764,13 @@ fn render_dock(ctx: &RenderContext) {
     }
 
     if ctx.picker_popover.is_visible() {
-        picker::render_picker(ctx, ctx.picker_search.text().as_ref());
+        picker::render_picker(
+            &ctx.state,
+            &ctx.picker_list,
+            &ctx.picker_search,
+            &ctx.contexts,
+            ctx.picker_search.text().as_ref(),
+        );
     }
 }
 
@@ -758,9 +789,7 @@ fn cleanup_widget_tree(widget: &gtk::Widget) {
         current = next;
     }
 
-    if let Some(popover) = widget.downcast_ref::<gtk::Popover>()
-        && !popover.is_visible()
-    {
+    if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
         popover.popdown();
         popover.set_child(None::<&gtk::Widget>);
         popover.unparent();

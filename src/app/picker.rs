@@ -1,15 +1,21 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use gtk4 as gtk;
 
 use crate::config;
 
-use super::{RenderContext, clear_children, icon_widget, render_all};
+use super::{DockState, RenderContext, clear_children, icon_widget, render_registered};
 
-pub(crate) fn render_picker(ctx: &RenderContext, query: &str) {
-    let state = &ctx.state;
-    let picker_list = &ctx.picker_list;
+pub(crate) fn render_picker(
+    state: &Rc<RefCell<DockState>>,
+    picker_list: &gtk::Box,
+    picker_search: &gtk::SearchEntry,
+    contexts: &Weak<RefCell<Vec<RenderContext>>>,
+    query: &str,
+) {
     clear_children(picker_list);
 
     let borrow = state.borrow();
@@ -50,9 +56,11 @@ pub(crate) fn render_picker(ctx: &RenderContext, query: &str) {
         row_button.set_child(Some(&row));
 
         {
-            let ctx = ctx.clone();
+            let state = Rc::clone(state);
+            let picker_search = picker_search.downgrade();
+            let contexts = contexts.clone();
             row_button.connect_clicked(move |_| {
-                let mut dock_state = ctx.state.borrow_mut();
+                let mut dock_state = state.borrow_mut();
                 if !dock_state.pins.iter().any(|pin| pin == &app.id) {
                     dock_state.pins.push(app.id.clone());
                     if let Err(error) = config::save_pins(&dock_state.pins) {
@@ -60,8 +68,10 @@ pub(crate) fn render_picker(ctx: &RenderContext, query: &str) {
                     }
                 }
                 drop(dock_state);
-                ctx.picker_search.set_text("");
-                render_all(&ctx);
+                if let Some(picker_search) = picker_search.upgrade() {
+                    picker_search.set_text("");
+                }
+                render_registered(&contexts);
             });
         }
 

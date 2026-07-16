@@ -39,12 +39,26 @@ pub(crate) fn install_hover(
     widget: &impl gtk::prelude::IsA<gtk::Widget>,
     autohide: &Rc<RefCell<AutoHideState>>,
 ) {
-    let enter_state = Rc::clone(autohide);
-    let leave_state = Rc::clone(autohide);
+    let enter_state = Rc::downgrade(autohide);
+    let leave_state = Rc::downgrade(autohide);
     let motion = gtk::EventControllerMotion::new();
-    motion.connect_enter(move |_, _, _| show_dock(&enter_state));
-    motion.connect_leave(move |_| schedule_hide(&leave_state));
+    motion.connect_enter(move |_, _, _| {
+        if let Some(state) = enter_state.upgrade() {
+            show_dock(&state);
+        }
+    });
+    motion.connect_leave(move |_| {
+        if let Some(state) = leave_state.upgrade() {
+            schedule_hide(&state);
+        }
+    });
     widget.add_controller(motion);
+}
+
+pub(crate) fn cancel_pending_hide(autohide: &Rc<RefCell<AutoHideState>>) {
+    if let Some(source) = autohide.borrow_mut().hide_source.take() {
+        source.remove();
+    }
 }
 
 pub(crate) fn schedule_hide(autohide: &Rc<RefCell<AutoHideState>>) {
