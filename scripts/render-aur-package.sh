@@ -30,6 +30,7 @@ sha256sums=('${sha256}')
 
 package() {
     install -Dm755 rudo "\${pkgdir}/usr/bin/rudo"
+    install -Dm644 rudo.service "\${pkgdir}/usr/lib/systemd/user/rudo.service"
     install -Dm644 README.md "\${pkgdir}/usr/share/doc/\${pkgname}/README.md"
     install -Dm644 LICENSE "\${pkgdir}/usr/share/licenses/\${pkgname}/LICENSE"
 }

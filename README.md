@@ -141,7 +141,26 @@ Set `confirm: true` to show a confirmation dialog before executing destructive c
 
 ## Autostart (niri)
 
-Add to your niri config:
+The GitHub release archive includes `rudo.service`. The `rudo-bin` AUR package installs it as a
+systemd user unit, but leaves activation to the user. Enable and start it with:
+
+```sh
+systemctl --user enable --now rudo.service
+```
+
+If you installed Rudo manually from the release archive, install the binary and unit first:
+
+```sh
+sudo install -Dm755 rudo /usr/local/bin/rudo
+install -Dm644 rudo.service ~/.config/systemd/user/rudo.service
+systemctl --user daemon-reload
+systemctl --user enable --now rudo.service
+```
+
+Niri starts `graphical-session.target`, which starts Rudo and stops it again with the graphical
+session. Remove any existing `spawn-at-startup "rudo"` entry before enabling the service.
+
+Alternatively, add Rudo directly to your niri config:
 
 ```kdl
 // ~/.config/niri/config.kdl

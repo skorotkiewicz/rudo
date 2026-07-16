@@ -6,7 +6,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/rudo
+ExecStart=rudo
 Restart=on-failure
 RestartSec=2s
 
