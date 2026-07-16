@@ -1,0 +1,14 @@
+[Unit]
+Description=Rudo dock for Wayland
+Documentation=https://github.com/skorotkiewicz/rudo
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rudo
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical-session.target
