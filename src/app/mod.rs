@@ -98,6 +98,7 @@ fn register_command_line_options(app: &gtk::Application) {
         ("toggle", b't', "Toggle dock visibility"),
         ("show", b's', "Show the dock"),
         ("hide", b'H', "Hide the dock"),
+        ("version", b'V', "Print version information"),
     ] {
         app.add_main_option(
             name,
@@ -1052,5 +1053,42 @@ impl ConfigWatchState {
 impl Drop for ConfigWatchState {
     fn drop(&mut self) {
         let _ = self.watcher.unwatch(&self.directory);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppCommand, command_from_options, validate_visibility_args};
+    use gtk4::glib;
+
+    fn options(names: &[&str]) -> glib::VariantDict {
+        let options = glib::VariantDict::new(None);
+        for name in names {
+            options.insert(name, true);
+        }
+        options
+    }
+
+    #[test]
+    fn no_visibility_option_means_show() {
+        assert_eq!(
+            command_from_options(&options(&[])).unwrap(),
+            AppCommand::Show
+        );
+    }
+
+    #[test]
+    fn toggle_option_is_recognized() {
+        assert_eq!(
+            command_from_options(&options(&["toggle"])).unwrap(),
+            AppCommand::Toggle
+        );
+    }
+
+    #[test]
+    fn visibility_options_are_mutually_exclusive() {
+        let args = ["rudo", "--show", "--hide"].map(str::to_string);
+        assert!(validate_visibility_args(&args).is_err());
+        assert!(command_from_options(&options(&["show", "hide"])).is_err());
     }
 }

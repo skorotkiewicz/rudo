@@ -61,12 +61,8 @@ pub(crate) fn install_pin_drag_and_drop(
             };
 
             let insert_after = match orientation {
-                gtk::Orientation::Horizontal => {
-                    x > f64::from(wrapper.allocated_width()) / 2.0
-                }
-                gtk::Orientation::Vertical => {
-                    y > f64::from(wrapper.allocated_height()) / 2.0
-                }
+                gtk::Orientation::Horizontal => x > f64::from(wrapper.allocated_width()) / 2.0,
+                gtk::Orientation::Vertical => y > f64::from(wrapper.allocated_height()) / 2.0,
                 _ => false,
             };
             let changed = {

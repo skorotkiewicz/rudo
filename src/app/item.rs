@@ -11,8 +11,7 @@ use crate::config;
 use crate::model::WindowState;
 
 use super::{
-    DockItem, DockState, RenderContext, autohide, icon_widget, render_all,
-    schedule_launch_expiry,
+    DockItem, DockState, RenderContext, autohide, icon_widget, render_all, schedule_launch_expiry,
 };
 
 pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Box {
@@ -87,10 +86,9 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     {
         let state = Rc::clone(state);
         let ctx = ctx.clone();
-        let popover =
-            build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
-                render_all(&ctx)
-            });
+        let popover = build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
+            render_all(&ctx)
+        });
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_SECONDARY);
