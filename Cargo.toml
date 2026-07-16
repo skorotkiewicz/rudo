@@ -1,6 +1,6 @@
 [package]
 name = "rudo"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 description = "A small, elegant dock for Wayland"
 license = "MIT"
