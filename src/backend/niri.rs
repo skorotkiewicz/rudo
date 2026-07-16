@@ -55,6 +55,10 @@ fn event_loop(
             break;
         }
 
+        if started_at.elapsed() >= Duration::from_secs(30) {
+            retry_delay = Duration::from_secs(1);
+        }
+
         if let Err(error) = result {
             eprintln!(
                 "Niri event stream stopped ({error}); reconnecting in {}s",
@@ -63,11 +67,7 @@ fn event_loop(
         }
 
         thread::sleep(retry_delay);
-        if started_at.elapsed() >= Duration::from_secs(30) {
-            retry_delay = Duration::from_secs(1);
-        } else {
-            retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
-        }
+        retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
     }
 }
 

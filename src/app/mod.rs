@@ -129,15 +129,17 @@ fn command_from_options(options: &glib::VariantDict) -> Result<AppCommand, Strin
 }
 
 fn validate_visibility_args(args: &[String]) -> Result<(), String> {
-    let selected = args
-        .iter()
-        .filter(|arg| {
-            matches!(
-                arg.as_str(),
-                "-t" | "--toggle" | "-s" | "--show" | "-H" | "--hide"
-            )
-        })
-        .count();
+    let selected = [
+        args.iter()
+            .any(|arg| matches!(arg.as_str(), "-t" | "--toggle")),
+        args.iter()
+            .any(|arg| matches!(arg.as_str(), "-s" | "--show")),
+        args.iter()
+            .any(|arg| matches!(arg.as_str(), "-H" | "--hide")),
+    ]
+    .into_iter()
+    .filter(|selected| *selected)
+    .count();
     if selected > 1 {
         Err("visibility options are mutually exclusive".to_string())
     } else {
@@ -186,8 +188,10 @@ pub(crate) struct DockState {
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(6);
 
 impl DockState {
-    pub(crate) fn mark_launching(&mut self, app_id: &str) {
-        self.launching.insert(app_id.to_string(), Instant::now());
+    pub(crate) fn mark_launching(&mut self, app_id: &str) -> Instant {
+        let started_at = Instant::now();
+        self.launching.insert(app_id.to_string(), started_at);
+        started_at
     }
 
     pub(crate) fn is_launching(&self, app_id: &str) -> bool {
@@ -719,17 +723,29 @@ fn render_contexts(contexts: &Rc<RefCell<Vec<RenderContext>>>) {
     }
 }
 
-pub(crate) fn schedule_launch_expiry(ctx: &RenderContext, app_id: &str) {
+pub(crate) fn schedule_launch_expiry(ctx: &RenderContext, app_id: &str, started_at: Instant) {
     let state = Rc::clone(&ctx.state);
     let contexts = ctx.contexts.clone();
     let app_id = app_id.to_string();
     glib::timeout_add_local_once(LAUNCH_TIMEOUT, move || {
-        if state.borrow_mut().launching.remove(&app_id).is_some()
+        if remove_launch_if_current(&mut state.borrow_mut().launching, &app_id, started_at)
             && let Some(contexts) = contexts.upgrade()
         {
             render_contexts(&contexts);
         }
     });
+}
+
+fn remove_launch_if_current(
+    launching: &mut HashMap<String, Instant>,
+    app_id: &str,
+    started_at: Instant,
+) -> bool {
+    if launching.get(app_id).copied() != Some(started_at) {
+        return false;
+    }
+    launching.remove(app_id);
+    true
 }
 
 fn render_dock(ctx: &RenderContext) {
@@ -1087,8 +1103,12 @@ impl Drop for ConfigWatchState {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppCommand, command_from_options, validate_visibility_args};
+    use super::{
+        AppCommand, command_from_options, remove_launch_if_current, validate_visibility_args,
+    };
     use gtk4::glib;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
 
     fn options(names: &[&str]) -> glib::VariantDict {
         let options = glib::VariantDict::new(None);
@@ -1119,5 +1139,23 @@ mod tests {
         let args = ["rudo", "--show", "--hide"].map(str::to_string);
         assert!(validate_visibility_args(&args).is_err());
         assert!(command_from_options(&options(&["show", "hide"])).is_err());
+    }
+
+    #[test]
+    fn repeating_the_same_visibility_option_is_allowed() {
+        let args = ["rudo", "--show", "--show"].map(str::to_string);
+        assert!(validate_visibility_args(&args).is_ok());
+    }
+
+    #[test]
+    fn stale_launch_timeout_does_not_clear_a_newer_launch() {
+        let first = Instant::now();
+        let second = first + Duration::from_millis(1);
+        let mut launching = HashMap::from([("app".to_string(), second)]);
+
+        assert!(!remove_launch_if_current(&mut launching, "app", first));
+        assert_eq!(launching.get("app"), Some(&second));
+        assert!(remove_launch_if_current(&mut launching, "app", second));
+        assert!(!launching.contains_key("app"));
     }
 }

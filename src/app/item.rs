@@ -73,8 +73,8 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
 
                 match app.launch() {
                     Ok(()) => {
-                        state.borrow_mut().mark_launching(&app.id);
-                        schedule_launch_expiry(&ctx, &app.id);
+                        let started_at = state.borrow_mut().mark_launching(&app.id);
+                        schedule_launch_expiry(&ctx, &app.id, started_at);
                         render_all(&ctx);
                     }
                     Err(error) => eprintln!("failed to launch {}: {error}", app.id),
