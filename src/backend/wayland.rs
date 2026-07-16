@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, mpsc::Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use wayland_client::protocol::{
@@ -14,12 +14,12 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
 };
 
-use super::{BackendController, controller_channel};
-use crate::model::{BackendEvent, BackendRequest, WindowState};
+use super::{BackendController, EventMailbox, controller_channel};
+use crate::model::{BackendRequest, WindowState};
 
-pub fn spawn(event_tx: Sender<BackendEvent>) -> Option<BackendController> {
+pub fn spawn(events: EventMailbox) -> Option<BackendController> {
     let connection = Connection::connect_to_env().ok()?;
-    let (controller, rx) = controller_channel();
+    let (controller, rx, _lifetime) = controller_channel();
     let control = Arc::new(Mutex::new(ControlState::new(connection.clone())));
 
     {
@@ -32,35 +32,41 @@ pub fn spawn(event_tx: Sender<BackendEvent>) -> Option<BackendController> {
 
     thread::Builder::new()
         .name("rudo-wayland-events".into())
-        .spawn(move || event_loop(connection, control, event_tx))
+        .spawn(move || event_loop(connection, control, events))
         .ok()?;
 
     Some(controller)
 }
 
-fn event_loop(
-    connection: Connection,
-    control: Arc<Mutex<ControlState>>,
-    event_tx: Sender<BackendEvent>,
-) {
+fn event_loop(connection: Connection, control: Arc<Mutex<ControlState>>, events: EventMailbox) {
     let mut event_queue = connection.new_event_queue::<WaylandState>();
     let qh = event_queue.handle();
     let _registry = connection.display().get_registry(&qh, ());
     let _sync = connection.display().sync(&qh, ());
 
     let mut state = WaylandState {
-        event_tx,
+        events,
         control,
         manager: None,
         windows: HashMap::new(),
         next_id: 1,
     };
 
-    if event_queue.roundtrip(&mut state).is_err() || state.manager.is_none() {
+    if let Err(error) = event_queue.roundtrip(&mut state) {
+        eprintln!("Wayland backend initialization failed: {error}");
+        return;
+    }
+    if state.manager.is_none() {
+        eprintln!("compositor does not support wlr-foreign-toplevel-management");
         return;
     }
 
-    while event_queue.blocking_dispatch(&mut state).is_ok() {}
+    loop {
+        if let Err(error) = event_queue.blocking_dispatch(&mut state) {
+            eprintln!("Wayland backend stopped: {error}");
+            break;
+        }
+    }
 }
 
 fn command_loop(control: Arc<Mutex<ControlState>>, rx: std::sync::mpsc::Receiver<BackendRequest>) {
@@ -108,7 +114,7 @@ impl ControlState {
 }
 
 struct WaylandState {
-    event_tx: Sender<BackendEvent>,
+    events: EventMailbox,
     control: Arc<Mutex<ControlState>>,
     manager: Option<ZwlrForeignToplevelManagerV1>,
     windows: HashMap<ZwlrForeignToplevelHandleV1, ToplevelState>,
@@ -137,7 +143,7 @@ impl WaylandState {
                 badge_count: window.badge_count,
             })
             .collect();
-        let _ = self.event_tx.send(BackendEvent::Snapshot(snapshot));
+        self.events.publish(snapshot);
     }
 }
 

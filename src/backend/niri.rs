@@ -4,80 +4,112 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
+use std::sync::Weak;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::{BackendController, controller_channel};
-use crate::model::{BackendEvent, BackendRequest, WindowState};
+use super::{BackendController, BackendControllerInner, EventMailbox, controller_channel};
+use crate::model::{BackendRequest, WindowState};
 
-pub fn spawn(event_tx: Sender<BackendEvent>) -> Option<BackendController> {
-    let socket_path = PathBuf::from(env::var_os("NIRI_SOCKET")?);
-    let (controller, rx) = controller_channel();
+pub fn spawn(events: EventMailbox) -> Result<BackendController, NiriError> {
+    let socket_path = PathBuf::from(env::var_os("NIRI_SOCKET").ok_or(NiriError::NoSocket)?);
+    let initial_stream = UnixStream::connect(&socket_path)?;
+    let (controller, rx, lifetime) = controller_channel();
 
-    {
-        let socket_path = socket_path.clone();
-        let event_tx = event_tx.clone();
-        thread::Builder::new()
-            .name("rudo-niri-events".into())
-            .spawn(move || event_loop(&socket_path, &event_tx))
-            .ok()?;
-    }
-
+    let command_socket_path = socket_path.clone();
     thread::Builder::new()
         .name("rudo-niri-commands".into())
-        .spawn(move || command_loop(&socket_path, &rx))
-        .ok()?;
+        .spawn(move || command_loop(&command_socket_path, &rx))
+        .map_err(NiriError::Thread)?;
 
-    Some(controller)
+    thread::Builder::new()
+        .name("rudo-niri-events".into())
+        .spawn(move || event_loop(&socket_path, initial_stream, &events, &lifetime))
+        .map_err(NiriError::Thread)?;
+
+    Ok(controller)
 }
 
-fn event_loop(socket_path: &PathBuf, event_tx: &Sender<BackendEvent>) {
-    let Ok(mut stream) = UnixStream::connect(socket_path) else {
-        return;
-    };
+fn event_loop(
+    socket_path: &PathBuf,
+    initial_stream: UnixStream,
+    events: &EventMailbox,
+    lifetime: &Weak<BackendControllerInner>,
+) {
+    let mut stream = Some(initial_stream);
+    let mut retry_delay = Duration::from_secs(1);
 
-    if write_json_line(&mut stream, &Request::EventStream).is_err() {
-        return;
-    }
-
-    let Ok(reader_stream) = stream.try_clone() else {
-        return;
-    };
-    let mut reader = BufReader::new(reader_stream);
-
-    let mut line = String::new();
-    if reader
-        .read_line(&mut line)
-        .ok()
-        .filter(|read| *read > 0)
-        .is_none()
-    {
-        return;
-    }
-
-    let Ok(reply) = serde_json::from_str::<Reply>(&line) else {
-        return;
-    };
-    if !matches!(reply, Ok(Response::Handled)) {
-        return;
-    }
-
-    let mut windows = BTreeMap::<u64, Window>::new();
-
-    loop {
-        line.clear();
-        let Ok(read) = reader.read_line(&mut line) else {
-            break;
+    while lifetime.upgrade().is_some() {
+        let started_at = Instant::now();
+        let result = match stream.take() {
+            Some(stream) => event_session(stream, events),
+            None => UnixStream::connect(socket_path)
+                .map_err(NiriError::Connection)
+                .and_then(|stream| event_session(stream, events)),
         };
-        if read == 0 {
+
+        if lifetime.upgrade().is_none() {
             break;
         }
 
-        let Ok(event) = serde_json::from_str::<Event>(&line) else {
-            continue;
+        if let Err(error) = result {
+            eprintln!(
+                "Niri event stream stopped ({error}); reconnecting in {}s",
+                retry_delay.as_secs()
+            );
+        }
+
+        thread::sleep(retry_delay);
+        if started_at.elapsed() >= Duration::from_secs(30) {
+            retry_delay = Duration::from_secs(1);
+        } else {
+            retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+        }
+    }
+}
+
+fn event_session(mut stream: UnixStream, events: &EventMailbox) -> Result<(), NiriError> {
+    write_json_line(&mut stream, &Request::EventStream)?;
+
+    let reader_stream = stream.try_clone()?;
+    let mut reader = BufReader::new(reader_stream);
+
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(NiriError::ConnectionClosed);
+    }
+
+    let reply = serde_json::from_str::<Reply>(&line)?;
+    if !matches!(reply, Ok(Response::Handled)) {
+        return Err(NiriError::Protocol(
+            "event stream request was rejected".to_string(),
+        ));
+    }
+
+    let mut windows = BTreeMap::<u64, Window>::new();
+    let mut logged_invalid_event = false;
+
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line)?;
+        if read == 0 {
+            return Err(NiriError::ConnectionClosed);
+        }
+
+        let event = match serde_json::from_str::<Event>(&line) {
+            Ok(event) => event,
+            Err(error) => {
+                if !logged_invalid_event {
+                    eprintln!(
+                        "ignoring malformed Niri event; further parse errors on this connection will be suppressed: {error}"
+                    );
+                    logged_invalid_event = true;
+                }
+                continue;
+            }
         };
 
         match event {
@@ -86,7 +118,7 @@ fn event_loop(socket_path: &PathBuf, event_tx: &Sender<BackendEvent>) {
                     .into_iter()
                     .map(|window| (window.id, window))
                     .collect();
-                publish_snapshot(event_tx, &windows);
+                publish_snapshot(events, &windows);
             }
             Event::WindowOpenedOrChanged { window } => {
                 if window.is_focused {
@@ -95,17 +127,17 @@ fn event_loop(socket_path: &PathBuf, event_tx: &Sender<BackendEvent>) {
                     }
                 }
                 windows.insert(window.id, window);
-                publish_snapshot(event_tx, &windows);
+                publish_snapshot(events, &windows);
             }
             Event::WindowClosed { id } => {
                 windows.remove(&id);
-                publish_snapshot(event_tx, &windows);
+                publish_snapshot(events, &windows);
             }
             Event::WindowFocusChanged { id } => {
                 for (window_id, window) in &mut windows {
                     window.is_focused = Some(*window_id) == id;
                 }
-                publish_snapshot(event_tx, &windows);
+                publish_snapshot(events, &windows);
             }
             Event::Other => {}
         }
@@ -132,16 +164,22 @@ fn command_loop(socket_path: &PathBuf, rx: &std::sync::mpsc::Receiver<BackendReq
             }),
         };
 
-        let Ok(mut stream) = UnixStream::connect(socket_path) else {
-            continue;
+        let mut stream = match UnixStream::connect(socket_path) {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("failed to connect to Niri for window action: {error}");
+                continue;
+            }
         };
 
-        let _ = write_json_line(&mut stream, &request);
+        if let Err(error) = write_json_line(&mut stream, &request) {
+            eprintln!("failed to send Niri window action: {error}");
+        }
         let _ = stream.shutdown(Shutdown::Write);
     }
 }
 
-fn publish_snapshot(event_tx: &Sender<BackendEvent>, windows: &BTreeMap<u64, Window>) {
+fn publish_snapshot(events: &EventMailbox, windows: &BTreeMap<u64, Window>) {
     let snapshot = windows
         .values()
         .map(|window| WindowState {
@@ -152,15 +190,23 @@ fn publish_snapshot(event_tx: &Sender<BackendEvent>, windows: &BTreeMap<u64, Win
             badge_count: None,
         })
         .collect();
-    let _ = event_tx.send(BackendEvent::Snapshot(snapshot));
+    events.publish(snapshot);
 }
 
 #[derive(Debug, Error)]
-enum NiriError {
+pub(super) enum NiriError {
+    #[error("NIRI_SOCKET is not set")]
+    NoSocket,
     #[error("Failed to connect to Niri socket: {0}")]
     Connection(#[from] std::io::Error),
     #[error("Failed to serialize request: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("Niri event stream closed")]
+    ConnectionClosed,
+    #[error("Niri protocol error: {0}")]
+    Protocol(String),
+    #[error("Failed to spawn backend thread: {0}")]
+    Thread(std::io::Error),
 }
 
 fn write_json_line<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<(), NiriError> {

@@ -4,9 +4,14 @@ use gtk4 as gtk;
 
 use crate::config;
 
-use super::{RenderContext, render_dock};
+use super::{RenderContext, render_all};
 
-pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext, pin_id: &str) {
+pub(crate) fn install_pin_drag_and_drop(
+    wrapper: &gtk::Box,
+    highlight: &gtk::Button,
+    ctx: &RenderContext,
+    pin_id: &str,
+) {
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
     let source_pin = pin_id.to_string();
@@ -18,33 +23,52 @@ pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext,
     let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
 
     {
-        let wrapper = wrapper.clone();
+        let highlight = highlight.downgrade();
         drop_target.connect_enter(move |_, _, _| {
-            wrapper.add_css_class("is-drop-target");
+            if let Some(highlight) = highlight.upgrade() {
+                highlight.add_css_class("is-drop-target");
+            }
             gdk::DragAction::MOVE
         });
     }
 
     {
-        let wrapper = wrapper.clone();
+        let highlight = highlight.downgrade();
         drop_target.connect_leave(move |_| {
-            wrapper.remove_css_class("is-drop-target");
+            if let Some(highlight) = highlight.upgrade() {
+                highlight.remove_css_class("is-drop-target");
+            }
         });
     }
 
     {
         let ctx = ctx.clone();
         let target_pin = pin_id.to_string();
-        let wrapper = wrapper.clone();
+        let wrapper = wrapper.downgrade();
+        let highlight = highlight.downgrade();
+        let orientation = ctx.items_box.orientation();
 
-        drop_target.connect_drop(move |_, value, x, _| {
-            wrapper.remove_css_class("is-drop-target");
+        drop_target.connect_drop(move |_, value, x, y| {
+            let Some(wrapper) = wrapper.upgrade() else {
+                return false;
+            };
+            if let Some(highlight) = highlight.upgrade() {
+                highlight.remove_css_class("is-drop-target");
+            }
 
             let Ok(dragged_pin) = value.get::<String>() else {
                 return false;
             };
 
-            let insert_after = x > f64::from(wrapper.allocated_width()) / 2.0;
+            let insert_after = match orientation {
+                gtk::Orientation::Horizontal => {
+                    x > f64::from(wrapper.allocated_width()) / 2.0
+                }
+                gtk::Orientation::Vertical => {
+                    y > f64::from(wrapper.allocated_height()) / 2.0
+                }
+                _ => false,
+            };
             let changed = {
                 let mut dock_state = ctx.state.borrow_mut();
                 reorder_pins(
@@ -56,8 +80,10 @@ pub(crate) fn install_pin_drag_and_drop(wrapper: &gtk::Box, ctx: &RenderContext,
             };
 
             if changed {
-                config::save_pins(&ctx.state.borrow().pins);
-                render_dock(&ctx);
+                if let Err(error) = config::save_pins(&ctx.state.borrow().pins) {
+                    eprintln!("failed to save dock pins: {error}");
+                }
+                render_all(&ctx);
             }
 
             changed
@@ -94,4 +120,35 @@ fn reorder_pins(
 
     pins.insert(target_idx.min(pins.len()), dragged);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reorder_pins;
+
+    fn pins() -> Vec<String> {
+        ["a", "b", "c"].map(str::to_string).to_vec()
+    }
+
+    #[test]
+    fn moves_pin_before_target() {
+        let mut pins = pins();
+        assert!(reorder_pins(&mut pins, "c", "a", false));
+        assert_eq!(pins, ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn moves_pin_after_target() {
+        let mut pins = pins();
+        assert!(reorder_pins(&mut pins, "a", "b", true));
+        assert_eq!(pins, ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn ignores_self_and_unknown_pins() {
+        let mut pins = pins();
+        assert!(!reorder_pins(&mut pins, "a", "a", false));
+        assert!(!reorder_pins(&mut pins, "missing", "a", false));
+        assert_eq!(pins, ["a", "b", "c"]);
+    }
 }

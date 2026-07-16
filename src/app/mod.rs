@@ -1,19 +1,22 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::rc::Rc;
-use std::sync::mpsc;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
+use gtk::gdk;
+use gtk::gio;
 use gtk::glib::{self, ControlFlow};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::backend::{self, BackendController};
+use crate::backend::{self, BackendController, EventMailbox};
 use crate::catalog::{AppCatalog, AppRecord};
 use crate::config;
-use crate::model::{BackendEvent, WindowState};
+use crate::model::WindowState;
 
 mod autohide;
 mod css;
@@ -22,12 +25,140 @@ mod item;
 mod picker;
 
 pub fn run() {
+    let args = std::env::args().collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "-V" || arg == "--version") {
+        println!("rudo {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if let Err(error) = validate_visibility_args(&args) {
+        eprintln!("rudo: {error}");
+        return;
+    }
+
     let app = gtk::Application::builder()
         .application_id("dev.rudo.dock")
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
 
-    app.connect_activate(build_ui);
+    register_command_line_options(&app);
+
+    let runtime = Rc::new(RefCell::new(None::<Rc<AppRuntime>>));
+
+    {
+        let runtime = Rc::clone(&runtime);
+        app.connect_activate(move |app| {
+            ensure_runtime(app, &runtime).show();
+        });
+    }
+
+    {
+        let runtime = Rc::clone(&runtime);
+        app.connect_command_line(move |app, command_line| {
+            let options = command_line.options_dict();
+            let command = match command_from_options(&options) {
+                Ok(command) => command,
+                Err(error) => {
+                    eprintln!("rudo: {error}");
+                    return glib::ExitCode::FAILURE;
+                }
+            };
+
+            match command {
+                AppCommand::Show => ensure_runtime(app, &runtime).show(),
+                AppCommand::Toggle => {
+                    if let Some(existing) = runtime.borrow().as_ref().cloned() {
+                        existing.toggle();
+                    } else {
+                        ensure_runtime(app, &runtime).show();
+                    }
+                }
+                AppCommand::Hide => {
+                    if let Some(existing) = runtime.borrow().as_ref() {
+                        existing.hide();
+                    }
+                }
+            }
+
+            glib::ExitCode::SUCCESS
+        });
+    }
+
     app.run();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppCommand {
+    Show,
+    Toggle,
+    Hide,
+}
+
+fn register_command_line_options(app: &gtk::Application) {
+    for (name, short, description) in [
+        ("toggle", b't', "Toggle dock visibility"),
+        ("show", b's', "Show the dock"),
+        ("hide", b'H', "Hide the dock"),
+    ] {
+        app.add_main_option(
+            name,
+            short.into(),
+            glib::OptionFlags::NONE,
+            glib::OptionArg::None,
+            description,
+            None,
+        );
+    }
+}
+
+fn command_from_options(options: &glib::VariantDict) -> Result<AppCommand, String> {
+    let selected = [
+        ("toggle", AppCommand::Toggle),
+        ("show", AppCommand::Show),
+        ("hide", AppCommand::Hide),
+    ]
+    .into_iter()
+    .filter_map(|(name, command)| option_enabled(options, name).then_some(command))
+    .collect::<Vec<_>>();
+
+    match selected.as_slice() {
+        [] => Ok(AppCommand::Show),
+        [command] => Ok(*command),
+        _ => Err("visibility options are mutually exclusive".to_string()),
+    }
+}
+
+fn validate_visibility_args(args: &[String]) -> Result<(), String> {
+    let selected = args
+        .iter()
+        .filter(|arg| {
+            matches!(
+                arg.as_str(),
+                "-t" | "--toggle" | "-s" | "--show" | "-H" | "--hide"
+            )
+        })
+        .count();
+    if selected > 1 {
+        Err("visibility options are mutually exclusive".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+fn option_enabled(options: &glib::VariantDict, name: &str) -> bool {
+    options.lookup::<bool>(name).ok().flatten().unwrap_or(false)
+}
+
+fn ensure_runtime(
+    app: &gtk::Application,
+    slot: &Rc<RefCell<Option<Rc<AppRuntime>>>>,
+) -> Rc<AppRuntime> {
+    if let Some(runtime) = slot.borrow().as_ref().cloned() {
+        return runtime;
+    }
+
+    let runtime = AppRuntime::new(app);
+    *slot.borrow_mut() = Some(Rc::clone(&runtime));
+    runtime
 }
 
 #[derive(Clone)]
@@ -49,9 +180,6 @@ pub(crate) struct DockState {
     pub(crate) backend: Option<BackendController>,
     pub(crate) launching: HashMap<String, Instant>,
     pub(crate) icon_size: i32,
-    last_pins: Vec<String>,
-    last_windows: Vec<WindowState>,
-    last_launching_keys: Vec<String>,
 }
 
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(6);
@@ -85,26 +213,6 @@ impl DockState {
         self.launching
             .retain(|app_id, _| !opened_apps.contains(app_id.as_str()));
     }
-
-    fn needs_render(&mut self) -> bool {
-        let launching_keys = {
-            let mut keys: Vec<String> = self.launching.keys().cloned().collect();
-            keys.sort();
-            keys
-        };
-
-        let changed = self.pins != self.last_pins
-            || self.windows != self.last_windows
-            || launching_keys != self.last_launching_keys;
-
-        if changed {
-            self.last_pins.clone_from(&self.pins);
-            self.last_windows.clone_from(&self.windows);
-            self.last_launching_keys = launching_keys;
-        }
-
-        changed
-    }
 }
 
 #[derive(Clone)]
@@ -115,34 +223,294 @@ pub(crate) struct RenderContext {
     pub(crate) picker_list: gtk::Box,
     pub(crate) picker_popover: gtk::Popover,
     pub(crate) autohide: Rc<RefCell<autohide::AutoHideState>>,
+    contexts: Weak<RefCell<Vec<RenderContext>>>,
 }
 
-fn build_ui(app: &gtk::Application) {
-    let user_css_provider = css::install();
-    config::ensure_settings();
-    let settings = config::load_settings();
+struct DockView {
+    window: gtk::ApplicationWindow,
+    ctx: RenderContext,
+}
+
+struct AppRuntime {
+    app: gtk::Application,
+    state: Rc<RefCell<DockState>>,
+    settings: RefCell<config::Settings>,
+    views: RefCell<Vec<DockView>>,
+    contexts: Rc<RefCell<Vec<RenderContext>>>,
+    visible: Cell<bool>,
+    backend_events: EventMailbox,
+    config_changes: ConfigChanges,
+    user_css_provider: Option<gtk::CssProvider>,
+    monitor_model: Option<gio::ListModel>,
+    _config_watch: Option<ConfigWatchState>,
+}
+
+impl AppRuntime {
+    fn new(app: &gtk::Application) -> Rc<Self> {
+        if let Err(error) = config::ensure_settings() {
+            eprintln!("failed to prepare dock settings: {error}");
+        }
+        if let Err(error) = config::ensure_style_css() {
+            eprintln!("failed to prepare dock stylesheet: {error}");
+        }
+
+        let settings = config::load_settings().unwrap_or_else(|error| {
+            eprintln!(
+                "failed to load settings; using defaults without overwriting the file: {error}"
+            );
+            config::Settings::default()
+        });
+        let user_css_provider = css::install();
+
+        let catalog = AppCatalog::load();
+        let pins = match config::load_pins() {
+            Ok(pins) => sanitize_pins(&catalog, pins),
+            Err(error) => {
+                eprintln!(
+                    "failed to load pins; preserving the file and starting with no pins: {error}"
+                );
+                Vec::new()
+            }
+        };
+
+        let backend_events = EventMailbox::default();
+        let backend = backend::spawn(backend_events.clone());
+        let state = Rc::new(RefCell::new(DockState {
+            catalog,
+            pins,
+            windows: Vec::new(),
+            backend,
+            launching: HashMap::new(),
+            icon_size: settings.icon_size,
+        }));
+
+        let config_changes = ConfigChanges::default();
+        let config_watch = ConfigWatchState::new(config_changes.clone())
+            .map_err(|error| eprintln!("live config reload is unavailable: {error}"))
+            .ok();
+        let monitor_model = gdk::Display::default().map(|display| display.monitors());
+
+        let runtime = Rc::new(Self {
+            app: app.clone(),
+            state,
+            settings: RefCell::new(settings),
+            views: RefCell::new(Vec::new()),
+            contexts: Rc::new(RefCell::new(Vec::new())),
+            visible: Cell::new(true),
+            backend_events,
+            config_changes,
+            user_css_provider,
+            monitor_model,
+            _config_watch: config_watch,
+        });
+
+        runtime.install_sources();
+        runtime.rebuild_views();
+        runtime
+    }
+
+    fn install_sources(self: &Rc<Self>) {
+        {
+            let runtime = Rc::downgrade(self);
+            glib::timeout_add_local(Duration::from_millis(80), move || {
+                let Some(runtime) = runtime.upgrade() else {
+                    return ControlFlow::Break;
+                };
+                runtime.process_backend_snapshot();
+                ControlFlow::Continue
+            });
+        }
+
+        {
+            let runtime = Rc::downgrade(self);
+            glib::timeout_add_local(Duration::from_millis(200), move || {
+                let Some(runtime) = runtime.upgrade() else {
+                    return ControlFlow::Break;
+                };
+                runtime.process_config_changes();
+                ControlFlow::Continue
+            });
+        }
+
+        if let Some(monitors) = self.monitor_model.as_ref() {
+            let runtime = Rc::downgrade(self);
+            monitors.connect_items_changed(move |_, _, _, _| {
+                if let Some(runtime) = runtime.upgrade() {
+                    runtime.rebuild_views();
+                }
+            });
+        }
+    }
+
+    fn process_backend_snapshot(&self) {
+        let Some(snapshot) = self.backend_events.take_latest() else {
+            return;
+        };
+
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            if state.windows == snapshot {
+                false
+            } else {
+                state.windows = snapshot;
+                state.reconcile_launching();
+                true
+            }
+        };
+
+        if changed {
+            render_contexts(&self.contexts);
+        }
+    }
+
+    fn process_config_changes(&self) {
+        let changes = self.config_changes.take();
+        if changes == 0 {
+            return;
+        }
+
+        let mut rerender = false;
+        let mut rebuild_views = false;
+
+        if changes & ConfigChanges::PINS != 0 {
+            match config::load_pins() {
+                Ok(pins) => {
+                    let mut state = self.state.borrow_mut();
+                    let pins = sanitize_pins(&state.catalog, pins);
+                    if state.pins != pins {
+                        state.pins = pins;
+                        rerender = true;
+                    }
+                }
+                Err(error) => {
+                    eprintln!("ignored invalid pins update and kept the last valid state: {error}");
+                }
+            }
+        }
+
+        if changes & ConfigChanges::SETTINGS != 0 {
+            match config::load_settings() {
+                Ok(settings) if settings != *self.settings.borrow() => {
+                    self.state.borrow_mut().icon_size = settings.icon_size;
+                    *self.settings.borrow_mut() = settings;
+                    rebuild_views = true;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!(
+                        "ignored invalid settings update and kept the last valid state: {error}"
+                    );
+                }
+            }
+        }
+
+        if changes & ConfigChanges::STYLE != 0 {
+            match config::load_style_css() {
+                Ok(css) => {
+                    if let Some(provider) = self.user_css_provider.as_ref() {
+                        provider.load_from_data(css.as_deref().unwrap_or_default());
+                    }
+                }
+                Err(error) => eprintln!("ignored stylesheet update: {error}"),
+            }
+        }
+
+        if rebuild_views {
+            self.rebuild_views();
+        } else if rerender {
+            render_contexts(&self.contexts);
+        }
+    }
+
+    fn monitor_targets(&self) -> Vec<Option<gdk::Monitor>> {
+        let mut monitors = self
+            .monitor_model
+            .as_ref()
+            .map(|model| {
+                (0..model.n_items())
+                    .filter_map(|index| model.item(index))
+                    .filter_map(|item| item.downcast::<gdk::Monitor>().ok())
+                    .map(Some)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if self.settings.borrow().outputs == config::OutputMode::First {
+            monitors.truncate(1);
+        }
+        if monitors.is_empty() {
+            monitors.push(None);
+        }
+        monitors
+    }
+
+    fn rebuild_views(&self) {
+        let settings = self.settings.borrow().clone();
+        let contexts = Rc::downgrade(&self.contexts);
+        let new_views = self
+            .monitor_targets()
+            .into_iter()
+            .map(|monitor| {
+                build_view(
+                    &self.app,
+                    Rc::clone(&self.state),
+                    &settings,
+                    contexts.clone(),
+                    monitor.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        *self.contexts.borrow_mut() = new_views.iter().map(|view| view.ctx.clone()).collect();
+        render_contexts(&self.contexts);
+
+        if self.visible.get() {
+            for view in &new_views {
+                view.window.present();
+            }
+        }
+
+        let old_views = self.views.replace(new_views);
+        for view in old_views {
+            view.window.close();
+        }
+    }
+
+    fn show(&self) {
+        self.visible.set(true);
+        for view in self.views.borrow().iter() {
+            autohide::show_dock(&view.ctx.autohide);
+            autohide::schedule_hide(&view.ctx.autohide);
+            view.window.present();
+        }
+    }
+
+    fn hide(&self) {
+        self.visible.set(false);
+        for view in self.views.borrow().iter() {
+            view.window.set_visible(false);
+        }
+    }
+
+    fn toggle(&self) {
+        if self.visible.get() {
+            self.hide();
+        } else {
+            self.show();
+        }
+    }
+}
+
+fn build_view(
+    app: &gtk::Application,
+    state: Rc<RefCell<DockState>>,
+    settings: &config::Settings,
+    contexts: Weak<RefCell<Vec<RenderContext>>>,
+    monitor: Option<&gdk::Monitor>,
+) -> DockView {
     let autohide_enabled = settings.autohide.enabled;
     let show_pin_button = settings.show_pin_button;
     let position = settings.position;
-
-    let catalog = AppCatalog::load();
-    let pins = sanitize_pins(&catalog, config::load_pins());
-    config::save_pins(&pins);
-
-    let (backend_tx, backend_rx) = mpsc::channel();
-    let backend = backend::spawn(backend_tx);
-
-    let state = Rc::new(RefCell::new(DockState {
-        catalog,
-        pins,
-        windows: Vec::new(),
-        backend,
-        launching: HashMap::new(),
-        icon_size: settings.icon_size,
-        last_pins: Vec::new(),
-        last_windows: Vec::new(),
-        last_launching_keys: Vec::new(),
-    }));
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -162,6 +530,7 @@ fn build_ui(app: &gtk::Application) {
         window.set_keyboard_mode(KeyboardMode::None);
         window.set_anchor(layout.margin_edge, true);
         window.set_margin(layout.margin_edge, 6);
+        window.set_monitor(monitor);
     } else {
         window.set_decorated(false);
     }
@@ -259,72 +628,14 @@ fn build_ui(app: &gtk::Application) {
         picker_list: picker_list.clone(),
         picker_popover: picker_popover.clone(),
         autohide: Rc::clone(&autohide),
+        contexts,
     };
 
-    render_dock(&ctx);
     autohide::apply_settings(&window, &hover_strip, &autohide, &settings);
     autohide::install_hover(&picker_popover, &autohide);
 
     if let Some(ref menu) = menu_button {
         autohide::install_hover(&menu.popover, &autohide);
-    }
-
-    let (config_tx, config_rx) = mpsc::channel();
-    let config_watch = ConfigWatchState::new(config_tx);
-    std::mem::forget(config_watch);
-
-    {
-        let ctx = ctx.clone();
-        let window = window.clone();
-        let hover_strip = hover_strip.clone();
-        let picker_button = picker_button.clone();
-        let user_css_provider = user_css_provider.clone();
-        let current_settings = Rc::new(RefCell::new(settings));
-
-        glib::timeout_add_local(Duration::from_millis(100), move || {
-            let mut rerender = false;
-            let mut settings_to_apply = None;
-
-            while let Ok(event) = config_rx.try_recv() {
-                for path in &event.paths {
-                    if let Some(path_str) = path.to_str() {
-                        if path_str.contains("pins.json") {
-                            let mut dock_state = ctx.state.borrow_mut();
-                            let pins = sanitize_pins(&dock_state.catalog, config::load_pins());
-                            if dock_state.pins != pins {
-                                dock_state.pins.clone_from(&pins);
-                                config::save_pins(&pins);
-                                rerender = true;
-                            }
-                        } else if path_str.contains("settings.json") {
-                            let new_settings = config::load_settings();
-                            if new_settings != *current_settings.borrow() {
-                                *current_settings.borrow_mut() = new_settings.clone();
-                                settings_to_apply = Some(new_settings);
-                            }
-                        } else if path_str.contains("style.css") {
-                            if let Some(provider) = user_css_provider.as_ref() {
-                                provider
-                                    .load_from_data(&config::load_style_css().unwrap_or_default());
-                            }
-                            rerender = true;
-                        }
-                    }
-                }
-            }
-
-            if let Some(new_settings) = settings_to_apply {
-                picker_button.set_visible(new_settings.show_pin_button);
-                autohide::apply_settings(&window, &hover_strip, &ctx.autohide, &new_settings);
-                rerender = true;
-            }
-
-            if rerender {
-                render_dock(&ctx);
-            }
-
-            ControlFlow::Continue
-        });
     }
 
     {
@@ -334,18 +645,16 @@ fn build_ui(app: &gtk::Application) {
         picker_button.connect_clicked(move |_| {
             window_for_open.set_keyboard_mode(KeyboardMode::OnDemand);
             ctx.picker_search.set_text("");
-            picker::render_picker(&ctx.state, &ctx.picker_list, "");
+            picker::render_picker(&ctx, "");
             picker_popover.popup();
             ctx.picker_search.grab_focus();
-            render_dock(&ctx);
         });
     }
 
     {
-        let state = Rc::clone(&state);
-        let picker_list = picker_list.clone();
+        let ctx = ctx.clone();
         picker_search.connect_search_changed(move |entry| {
-            picker::render_picker(&state, &picker_list, entry.text().as_ref());
+            picker::render_picker(&ctx, entry.text().as_ref());
         });
     }
 
@@ -356,54 +665,50 @@ fn build_ui(app: &gtk::Application) {
         });
     }
 
-    {
-        let ctx = ctx.clone();
-        let backend_rx = backend_rx;
-
-        glib::timeout_add_local(Duration::from_millis(80), move || {
-            let mut changed = false;
-            while let Ok(event) = backend_rx.try_recv() {
-                match event {
-                    BackendEvent::Snapshot(snapshot) => {
-                        let mut dock_state = ctx.state.borrow_mut();
-                        dock_state.windows = snapshot;
-                        dock_state.reconcile_launching();
-                        changed = true;
-                    }
-                    BackendEvent::BadgeUpdate { id, count } => {
-                        let mut dock_state = ctx.state.borrow_mut();
-                        if let Some(window) = dock_state.windows.iter_mut().find(|w| w.id == id) {
-                            window.badge_count = count;
-                            changed = true;
-                        }
-                    }
-                }
-            }
-
-            if changed {
-                render_dock(&ctx);
-            }
-
-            ControlFlow::Continue
-        });
-    }
-
     autohide::install_hover(&dock_surface, &autohide);
     autohide::install_hover(&hover_strip, &autohide);
 
     autohide::schedule_hide(&autohide);
 
-    window.present();
+    DockView { window, ctx }
+}
+
+pub(crate) fn render_all(ctx: &RenderContext) {
+    if let Some(contexts) = ctx.contexts.upgrade() {
+        render_contexts(&contexts);
+    } else {
+        render_dock(ctx);
+    }
+}
+
+fn render_contexts(contexts: &Rc<RefCell<Vec<RenderContext>>>) {
+    let contexts = contexts.borrow().clone();
+    if let Some(ctx) = contexts.first() {
+        let mut state = ctx.state.borrow_mut();
+        state.prune_launching();
+        state.reconcile_launching();
+    }
+    for ctx in &contexts {
+        render_dock(ctx);
+    }
+}
+
+pub(crate) fn schedule_launch_expiry(ctx: &RenderContext, app_id: &str) {
+    let state = Rc::clone(&ctx.state);
+    let contexts = ctx.contexts.clone();
+    let app_id = app_id.to_string();
+    glib::timeout_add_local_once(LAUNCH_TIMEOUT, move || {
+        if state.borrow_mut().launching.remove(&app_id).is_some()
+            && let Some(contexts) = contexts.upgrade()
+        {
+            render_contexts(&contexts);
+        }
+    });
 }
 
 fn render_dock(ctx: &RenderContext) {
     let (pinned_items, running_items) = {
-        let mut dock_state = ctx.state.borrow_mut();
-        dock_state.prune_launching();
-        dock_state.reconcile_launching();
-        if !dock_state.needs_render() {
-            return;
-        }
+        let dock_state = ctx.state.borrow();
         collect_items(&dock_state)
     };
     let show_separator = !pinned_items.is_empty() && !running_items.is_empty();
@@ -433,11 +738,7 @@ fn render_dock(ctx: &RenderContext) {
     }
 
     if ctx.picker_popover.is_visible() {
-        picker::render_picker(
-            &ctx.state,
-            &ctx.picker_list,
-            ctx.picker_search.text().as_ref(),
-        );
+        picker::render_picker(ctx, ctx.picker_search.text().as_ref());
     }
 }
 
@@ -678,52 +979,78 @@ impl DockLayout {
     }
 }
 
+#[derive(Clone, Default)]
+struct ConfigChanges {
+    flags: Arc<AtomicU8>,
+}
+
+impl ConfigChanges {
+    const PINS: u8 = 1;
+    const SETTINGS: u8 = 1 << 1;
+    const STYLE: u8 = 1 << 2;
+    const ALL: u8 = Self::PINS | Self::SETTINGS | Self::STYLE;
+
+    fn mark_event(&self, event: &Event) {
+        let mut flags = 0;
+        for path in &event.paths {
+            match path.file_name().and_then(|name| name.to_str()) {
+                Some("pins.json") => flags |= Self::PINS,
+                Some("settings.json") => flags |= Self::SETTINGS,
+                Some("style.css") => flags |= Self::STYLE,
+                _ => {}
+            }
+        }
+        if event.paths.is_empty() {
+            flags = Self::ALL;
+        }
+        if flags != 0 {
+            self.flags.fetch_or(flags, Ordering::Release);
+        }
+    }
+
+    fn take(&self) -> u8 {
+        self.flags.swap(0, Ordering::AcqRel)
+    }
+}
+
 struct ConfigWatchState {
     watcher: RecommendedWatcher,
+    directory: std::path::PathBuf,
 }
 
 impl ConfigWatchState {
-    fn new(tx: mpsc::Sender<Event>) -> Self {
+    fn new(changes: ConfigChanges) -> Result<Self, String> {
+        let directory = config::config_dir()
+            .ok_or_else(|| "configuration directory is unavailable".to_string())?;
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("failed to create {}: {error}", directory.display()))?;
+
+        let logged_error = Arc::new(AtomicBool::new(false));
+        let callback_error = Arc::clone(&logged_error);
         let mut watcher = RecommendedWatcher::new(
-            move |res| {
-                if let Ok(event) = res {
-                    let _ = tx.send(event);
+            move |result| match result {
+                Ok(event) => {
+                    callback_error.store(false, Ordering::Release);
+                    changes.mark_event(&event);
                 }
+                Err(error) if !callback_error.swap(true, Ordering::AcqRel) => {
+                    eprintln!("config watcher error (further errors will be suppressed): {error}");
+                }
+                Err(_) => {}
             },
             Config::default(),
         )
-        .expect("Failed to create file watcher");
+        .map_err(|error| format!("failed to create config watcher: {error}"))?;
+        watcher
+            .watch(&directory, RecursiveMode::NonRecursive)
+            .map_err(|error| format!("failed to watch {}: {error}", directory.display()))?;
 
-        if let Some(pins_path) = config::pins_path() {
-            watcher
-                .watch(pins_path.as_path(), RecursiveMode::NonRecursive)
-                .expect("Failed to watch pins.json");
-        }
-        if let Some(settings_path) = config::settings_path() {
-            watcher
-                .watch(settings_path.as_path(), RecursiveMode::NonRecursive)
-                .expect("Failed to watch settings.json");
-        }
-        if let Some(style_path) = config::style_path() {
-            watcher
-                .watch(style_path.as_path(), RecursiveMode::NonRecursive)
-                .expect("Failed to watch style.css");
-        }
-
-        Self { watcher }
+        Ok(Self { watcher, directory })
     }
 }
 
 impl Drop for ConfigWatchState {
     fn drop(&mut self) {
-        if let Some(pins_path) = config::pins_path() {
-            let _ = self.watcher.unwatch(pins_path.as_path());
-        }
-        if let Some(settings_path) = config::settings_path() {
-            let _ = self.watcher.unwatch(settings_path.as_path());
-        }
-        if let Some(style_path) = config::style_path() {
-            let _ = self.watcher.unwatch(style_path.as_path());
-        }
+        let _ = self.watcher.unwatch(&self.directory);
     }
 }

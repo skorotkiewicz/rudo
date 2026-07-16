@@ -10,7 +10,10 @@ use crate::catalog::AppRecord;
 use crate::config;
 use crate::model::WindowState;
 
-use super::{DockItem, DockState, RenderContext, autohide, icon_widget};
+use super::{
+    DockItem, DockState, RenderContext, autohide, icon_widget, render_all,
+    schedule_launch_expiry,
+};
 
 pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Box {
     let state = &ctx.state;
@@ -72,7 +75,8 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
                 match app.launch() {
                     Ok(()) => {
                         state.borrow_mut().mark_launching(&app.id);
-                        super::render_dock(&ctx);
+                        schedule_launch_expiry(&ctx, &app.id);
+                        render_all(&ctx);
                     }
                     Err(error) => eprintln!("failed to launch {}: {error}", app.id),
                 }
@@ -83,9 +87,10 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     {
         let state = Rc::clone(state);
         let ctx = ctx.clone();
-        let popover = build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
-            super::render_dock(&ctx)
-        });
+        let popover =
+            build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
+                render_all(&ctx)
+            });
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_SECONDARY);
@@ -125,7 +130,7 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     if item.pinned
         && let Some(app) = item.app.as_ref()
     {
-        super::dnd::install_pin_drag_and_drop(&wrapper, ctx, &app.id);
+        super::dnd::install_pin_drag_and_drop(&wrapper, &button, ctx, &app.id);
     }
 
     wrapper
@@ -220,7 +225,9 @@ pub(crate) fn build_context_menu(
                 } else {
                     state.pins.push(id.clone());
                 }
-                config::save_pins(&state.pins);
+                if let Err(error) = config::save_pins(&state.pins) {
+                    eprintln!("failed to save dock pins: {error}");
+                }
                 drop(state);
                 popover.popdown();
                 rerender();
