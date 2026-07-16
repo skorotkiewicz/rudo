@@ -113,10 +113,12 @@ jobs:
 
       - name: Generate PKGBUILD dynamically
         run: |
+          set -euo pipefail
           binary_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${PKGVER}/rudo-${PKGVER}-x86_64-linux.tar.gz"
-          sha256="$(curl --fail --location --silent --show-error \
+          curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors "$binary_url" \
-            | sha256sum | awk '{print $1}')"
+            --output release.tar.gz
+          sha256="$(sha256sum release.tar.gz | awk '{print $1}')"
 
           bash ./scripts/render-aur-package.sh aur-dist \
             "$PACKAGE_NAME" \
