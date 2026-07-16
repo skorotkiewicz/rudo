@@ -632,7 +632,7 @@ fn build_view(
         contexts,
     };
 
-    autohide::apply_settings(&window, &hover_strip, &autohide, &settings);
+    autohide::apply_settings(&window, &hover_strip, &autohide, settings);
     autohide::install_hover(&picker_popover, &autohide);
 
     if let Some(ref menu) = menu_button {
