@@ -82,10 +82,10 @@ pub fn spawn(events: EventMailbox) -> Option<BackendController> {
     }
 
     match wayland::spawn(events) {
-        Some(controller) => Some(controller),
-        None => {
+        Ok(controller) => Some(controller),
+        Err(error) => {
             eprintln!(
-                "no supported window-tracking backend is available; pinned application launching will still work"
+                "no supported window-tracking backend is available ({error}); pinned application launching will still work"
             );
             None
         }
