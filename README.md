@@ -1,6 +1,6 @@
 # rudo
 
-![Rodo](docs/example.png)
+![Rudo — a small, elegant dock for Wayland](docs/rudo-banner.png)
 
 A small, elegant dock for Wayland.
 
