@@ -1,20 +1,21 @@
 /* Rudo Example Themes - Comprehensive CSS Reference
  * =================================================
  *
- * Copy sections you want to use into ~/.config/rudo/style.css
- * All values shown are examples - customize colors, sizes, and effects to taste.
+ * Copy sections you want to use into ~/.config/rudo/style.css.
+ * Uncomment only one base theme, then add any optional sections you want.
+ * GTK CSS does not support backdrop-filter; background blur must be configured
+ * separately in the compositor when it provides that feature.
  */
 
 /* ============================================================
  * THEME 1: Glassmorphism (Modern translucent)
  * ============================================================ */
-
+/*
 .dock-surface {
     padding: 10px 14px;
     border-radius: 24px;
     border: 1px solid rgba(255, 255, 255, 0.18);
     background: rgba(255, 255, 255, 0.08);
-    backdrop-filter: blur(20px);
     box-shadow:
         0 8px 32px rgba(0, 0, 0, 0.37),
         inset 0 1px 0 rgba(255, 255, 255, 0.2);
@@ -55,11 +56,13 @@
     background: linear-gradient(90deg, #7ec8e3, #a8d5e5);
 }
 
+*/
+
 /* ============================================================
  * THEME 2: Minimal Dark (Clean & understated)
  * ============================================================ */
 
-/*
+
 .dock-surface {
     padding: 6px 10px;
     border-radius: 12px;
@@ -101,7 +104,10 @@
     margin: 0 6px;
     background: rgba(255, 255, 255, 0.1);
 }
-*/
+
+.dock-separator.is-vertical {
+    margin: 6px 0;
+}
 
 /* ============================================================
  * THEME 3: Neon Cyberpunk (Vibrant & colorful)
@@ -169,7 +175,6 @@
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     background: rgba(30, 30, 35, 0.75);
-    backdrop-filter: blur(25px) saturate(180%);
     box-shadow:
         0 10px 40px rgba(0, 0, 0, 0.4),
         0 1px 0 rgba(255, 255, 255, 0.1) inset;
@@ -301,6 +306,23 @@
     opacity: 0.5;
 }
 
+/* Remove GTK's native popover panel so the themed child is the only surface. */
+popover.background,
+popover.background > contents {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+/* The optional configured menu also needs a panel after the native one is cleared. */
+.dock-menu {
+    padding: 12px;
+    background: rgba(30, 30, 35, 0.98);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 /* ============================================================
  * CONTEXT MENU STYLING
  * ============================================================ */
@@ -354,7 +376,7 @@
  * ADVANCED: Animations & Transitions
  * ============================================================ */
 
-/* Smooth reveal animation */
+/* Smooth reveal animation (optional; uncomment the complete block)
 .dock-surface {
     animation: dock-appear 0.3s ease-out;
 }
@@ -369,8 +391,9 @@
         transform: translateY(0) scale(1);
     }
 }
+*/
 
-/* Bounce effect on launch */
+/* Bounce effect on launch (optional; uncomment the complete block)
 .dock-item.is-launching {
     animation: launching-pulse 1s ease-in-out infinite;
 }
@@ -383,27 +406,26 @@
         transform: scale(0.95);
     }
 }
+*/
 
-/* Glow effect for active items */
+/* Glow effect for active items (optional)
 .dock-item.is-active {
     background: rgba(120, 180, 255, 0.25);
 }
+*/
 
 /* ============================================================
  * UTILITY: Hide elements
  * ============================================================ */
 
-/* Hide the pin button completely (alternative to settings.json) */
-/*
-.picker-button {
-    display: none;
-}
-*/
+/* GTK CSS cannot remove widgets from layout with display: none.
+ * To hide the pin button, set "show_pin_button": false in settings.json.
+ */
 
-/* Hide separators */
+/* Make separators invisible. This does not remove their layout spacing. */
 /*
 .dock-separator {
-    display: none;
+    opacity: 0;
 }
 */
 
@@ -427,10 +449,16 @@ Available CSS Classes:
 - .dock-indicator         - Dot below icons
 - .dock-separator         - Line between pinned/running
 - .dock-hover-strip       - Hover area for autohide
+- .dock-badge             - Unread-count badge container
+- .dock-badge-label       - Unread-count badge text
+- .menu-button            - Optional configured menu button
+- .dock-menu              - Optional configured menu popup
+- .dock-menu-item         - Button inside the configured menu
 - .is-active              - Modifier: active window
 - .is-running             - Modifier: has open windows
 - .is-launching           - Modifier: app is launching
 - .is-drop-target         - Modifier: drag hover state
+- .is-vertical            - Modifier: left/right dock layout
 - .launch-spinner         - Loading spinner
 - .picker                 - App picker popup container
 - .picker-row             - Picker list items
@@ -444,10 +472,10 @@ Available CSS Classes:
 
 Tips:
 -----
-1. Use browser DevTools (GTK Inspector) to debug live:
+1. Use GTK Inspector to debug live:
    GTK_DEBUG=interactive rudo
 
-2. Changes to style.css are detected every 700ms and reload automatically
+2. Changes to style.css reload automatically, normally within about 200ms
 
 3. Combine multiple themes by uncommenting sections or mixing properties
 
@@ -455,9 +483,11 @@ Tips:
    Example: rgba(255, 100, 50, 0.8) = orange at 80% opacity
 
 5. Common effects:
-   - backdrop-filter: blur(20px)    // Glass effect (requires compositor)
-   - box-shadow: 0 4px 20px rgba(0,0,0,0.3)   // Soft shadow
-   - transition: all 0.2s ease       // Smooth animations
-   - transform: scale(1.1)         // Grow effect
+   - Soft shadow: box-shadow: 0 4px 20px rgba(0,0,0,0.3)
+   - Smooth changes: transition: all 0.2s ease
+   - Grow effect: transform: scale(1.1)
+
+6. GTK CSS cannot blur content behind the dock. Configure blur in your
+   compositor and keep the dock background translucent if you want that effect.
 
 */
