@@ -37,6 +37,12 @@ A small, elegant dock for Wayland.
 
 </details>
 
+## Dependencies
+
+```
+sudo pacman -S gtk4-layer-shell pkgconf gtk4
+```
+
 ## Build
 
 ```sh
