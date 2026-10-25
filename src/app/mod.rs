@@ -227,6 +227,7 @@ pub(crate) struct RenderContext {
     pub(crate) picker_search: gtk::SearchEntry,
     pub(crate) picker_list: gtk::Box,
     pub(crate) picker_popover: gtk::Popover,
+    pub(crate) popover_position: gtk::PositionType,
     pub(crate) autohide: Rc<RefCell<autohide::AutoHideState>>,
     contexts: Weak<RefCell<Vec<RenderContext>>>,
 }
@@ -346,6 +347,8 @@ impl AppRuntime {
                 {
                     let mut state = runtime.state.borrow_mut();
                     state.catalog = catalog;
+                    let pins = std::mem::take(&mut state.pins);
+                    state.pins = sanitize_pins(&state.catalog, pins);
                     state.reconcile_launching();
                 }
                 render_contexts(&runtime.contexts);
@@ -496,6 +499,7 @@ impl AppRuntime {
         for view in old_views {
             autohide::cancel_pending_hide(&view.ctx.autohide);
             clear_children(&view.ctx.items_box);
+            cleanup_widget_tree(view.window.upcast_ref());
             view.window.close();
         }
     }
@@ -585,7 +589,7 @@ fn build_view(
 
     let picker_popover = gtk::Popover::new();
     picker_popover.set_has_arrow(false);
-    picker_popover.set_position(gtk::PositionType::Top);
+    picker_popover.set_position(layout.popover_position);
     picker_popover.set_parent(&picker_button);
 
     let picker_layout = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -603,10 +607,9 @@ fn build_view(
     picker_layout.append(&picker_scroll);
     picker_popover.set_child(Some(&picker_layout));
 
-    let menu_button = settings
-        .menu
-        .enabled
-        .then(|| item::build_menu_button(&settings.menu, settings.icon_size));
+    let menu_button = settings.menu.enabled.then(|| {
+        item::build_menu_button(&settings.menu, settings.icon_size, layout.popover_position)
+    });
 
     if let Some(ref menu) = menu_button
         && settings.menu.position == config::MenuPosition::Start
@@ -651,6 +654,7 @@ fn build_view(
         picker_search: picker_search.clone(),
         picker_list: picker_list.clone(),
         picker_popover: picker_popover.clone(),
+        popover_position: layout.popover_position,
         autohide: Rc::clone(&autohide),
         contexts,
     };
@@ -670,7 +674,9 @@ fn build_view(
         let window_for_open = window.downgrade();
         let contexts = ctx.contexts.clone();
         picker_button.connect_clicked(move |_| {
-            if let Some(window) = window_for_open.upgrade() {
+            if let Some(window) = window_for_open.upgrade()
+                && gtk4_layer_shell::is_supported()
+            {
                 window.set_keyboard_mode(KeyboardMode::OnDemand);
             }
             picker_search.set_text("");
@@ -698,7 +704,9 @@ fn build_view(
     {
         let window_for_close = window.downgrade();
         picker_popover.connect_closed(move |_| {
-            if let Some(window) = window_for_close.upgrade() {
+            if let Some(window) = window_for_close.upgrade()
+                && gtk4_layer_shell::is_supported()
+            {
                 window.set_keyboard_mode(KeyboardMode::None);
             }
         });
@@ -743,12 +751,25 @@ pub(crate) fn schedule_launch_expiry(ctx: &RenderContext, app_id: &str, started_
     let contexts = ctx.contexts.clone();
     let app_id = app_id.to_string();
     glib::timeout_add_local_once(LAUNCH_TIMEOUT, move || {
-        if remove_launch_if_current(&mut state.borrow_mut().launching, &app_id, started_at)
-            && let Some(contexts) = contexts.upgrade()
-        {
-            render_contexts(&contexts);
-        }
+        expire_launch(&state, &app_id, started_at, || {
+            if let Some(contexts) = contexts.upgrade() {
+                render_contexts(&contexts);
+            }
+        });
     });
+}
+
+fn expire_launch(
+    state: &RefCell<DockState>,
+    app_id: &str,
+    started_at: Instant,
+    rerender: impl FnOnce(),
+) {
+    // Drop the mutable borrow before rendering, which borrows the same state.
+    let expired = remove_launch_if_current(&mut state.borrow_mut().launching, app_id, started_at);
+    if expired {
+        rerender();
+    }
 }
 
 fn remove_launch_if_current(
@@ -861,9 +882,16 @@ fn group_windows(
         } else {
             let key = window
                 .app_id
-                .clone()
-                .or_else(|| window.title.clone())
-                .unwrap_or_else(|| window.id.clone());
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .or_else(|| {
+                    window
+                        .title
+                        .as_deref()
+                        .filter(|title| !title.trim().is_empty())
+                })
+                .unwrap_or(&window.id)
+                .to_string();
             unknown.entry(key).or_default().push(window.clone());
         }
     }
@@ -880,7 +908,7 @@ fn build_pinned_items(
         .iter()
         .filter_map(|id| {
             let app = state.catalog.app(id)?.clone();
-            let windows = known.remove(id).unwrap_or_default();
+            let windows = known.remove(&app.id).unwrap_or_default();
             let launching = state.is_launching(&app.id);
             Some(build_known_item(app, windows, true, launching))
         })
@@ -977,13 +1005,22 @@ fn aggregate_badges(windows: &[WindowState]) -> Option<u32> {
 fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     pins.into_iter()
-        .filter_map(|id| catalog.resolve_id(&id))
+        .filter_map(|id| {
+            let id = id.trim();
+            if id.is_empty() {
+                None
+            } else {
+                // A temporarily unavailable launcher must not erase a saved pin.
+                Some(catalog.resolve_id(id).unwrap_or_else(|| id.to_string()))
+            }
+        })
         .filter(|id| seen.insert(id.clone()))
         .collect()
 }
 
 struct DockLayout {
     margin_edge: Edge,
+    popover_position: gtk::PositionType,
     transition_type: gtk::RevealerTransitionType,
     orientation: gtk::Orientation,
     items_orientation: gtk::Orientation,
@@ -998,6 +1035,7 @@ impl DockLayout {
         match position {
             config::Position::Top => Self {
                 margin_edge: Edge::Top,
+                popover_position: gtk::PositionType::Bottom,
                 transition_type: gtk::RevealerTransitionType::SlideDown,
                 orientation: gtk::Orientation::Vertical,
                 items_orientation: gtk::Orientation::Horizontal,
@@ -1008,6 +1046,7 @@ impl DockLayout {
             },
             config::Position::Left => Self {
                 margin_edge: Edge::Left,
+                popover_position: gtk::PositionType::Right,
                 transition_type: gtk::RevealerTransitionType::SlideRight,
                 orientation: gtk::Orientation::Horizontal,
                 items_orientation: gtk::Orientation::Vertical,
@@ -1018,6 +1057,7 @@ impl DockLayout {
             },
             config::Position::Right => Self {
                 margin_edge: Edge::Right,
+                popover_position: gtk::PositionType::Left,
                 transition_type: gtk::RevealerTransitionType::SlideLeft,
                 orientation: gtk::Orientation::Horizontal,
                 items_orientation: gtk::Orientation::Vertical,
@@ -1028,6 +1068,7 @@ impl DockLayout {
             },
             config::Position::Bottom => Self {
                 margin_edge: Edge::Bottom,
+                popover_position: gtk::PositionType::Top,
                 transition_type: gtk::RevealerTransitionType::SlideUp,
                 orientation: gtk::Orientation::Vertical,
                 items_orientation: gtk::Orientation::Horizontal,
@@ -1124,12 +1165,18 @@ impl Drop for ConfigWatchState {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppCommand, ConfigChanges, command_from_options, remove_launch_if_current,
+        AppCommand, ConfigChanges, DockLayout, DockState, collect_items, command_from_options,
+        expire_launch, group_windows, remove_launch_if_current, sanitize_pins,
         validate_visibility_args,
     };
+    use crate::catalog::AppCatalog;
+    use crate::config::Position;
+    use crate::desktop_entries::DesktopEntries;
+    use crate::model::WindowState;
     use gtk4::glib;
     use notify::event::{AccessKind, AccessMode, DataChange, ModifyKind};
     use notify::{Event, EventKind};
+    use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
     use std::time::{Duration, Instant};
 
@@ -1196,6 +1243,151 @@ mod tests {
         );
         assert_eq!(changes.take(), ConfigChanges::SETTINGS);
         assert_eq!(changes.take(), 0, "pending changes must be consumed once");
+    }
+
+    fn state_with_launch(started_at: Instant) -> RefCell<DockState> {
+        RefCell::new(DockState {
+            catalog: AppCatalog::default(),
+            pins: Vec::new(),
+            windows: Vec::new(),
+            backend: None,
+            launching: HashMap::from([("app".to_string(), started_at)]),
+            icon_size: 24,
+        })
+    }
+
+    #[test]
+    fn expired_launch_releases_state_before_rendering() {
+        let started_at = Instant::now();
+        let state = state_with_launch(started_at);
+        let rendered = Cell::new(false);
+
+        expire_launch(&state, "app", started_at, || {
+            let state = state.borrow_mut();
+            assert!(
+                !state.is_launching("app"),
+                "expired launch must be cleared before rendering"
+            );
+            rendered.set(true);
+        });
+
+        assert!(rendered.get(), "expired launch must refresh the UI");
+    }
+
+    #[test]
+    fn stale_launch_expiry_does_not_render_or_clear_new_launch() {
+        let first = Instant::now();
+        let second = first + Duration::from_millis(1);
+        let state = state_with_launch(second);
+        expire_launch(&state, "app", first, || {
+            panic!("stale timeout must not render")
+        });
+        assert!(
+            state.borrow().is_launching("app"),
+            "newer launch must survive stale timeout"
+        );
+    }
+
+    #[test]
+    fn unavailable_launchers_keep_their_pins() {
+        let pins = [
+            "missing.desktop",
+            "another.desktop",
+            " missing.desktop ",
+            " ",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        assert_eq!(
+            sanitize_pins(&AppCatalog::default(), pins),
+            ["missing.desktop", "another.desktop"]
+        );
+    }
+
+    #[test]
+    fn restored_launcher_rejoins_its_pinned_windows_without_a_duplicate_item() {
+        let entries = DesktopEntries::new(&[(
+            "notes.desktop",
+            "Name=Notes\nExec=/bin/true\nStartupWMClass=notes-window",
+        )]);
+        let state = state_with_launch(Instant::now());
+        let mut state = state.borrow_mut();
+        state.pins = sanitize_pins(&state.catalog, vec!["notes".to_string()]);
+        state.windows = vec![WindowState {
+            id: "window".to_string(),
+            app_id: Some("notes-window".to_string()),
+            title: Some("A note".to_string()),
+            active: true,
+            badge_count: None,
+        }];
+        let (pinned, running) = collect_items(&state);
+        assert!(
+            pinned.is_empty(),
+            "unavailable launchers are hidden, not forgotten"
+        );
+        assert_eq!(running.len(), 1);
+
+        state.catalog = entries.catalog();
+        let (pinned, running) = collect_items(&state);
+        assert_eq!(
+            pinned.len(),
+            1,
+            "restoring the launcher must restore the saved pin"
+        );
+        assert_eq!(
+            pinned[0].windows.len(),
+            1,
+            "alias pins must claim canonical window groups"
+        );
+        assert!(
+            running.is_empty(),
+            "the pinned app must not also appear as an unpinned app"
+        );
+    }
+
+    #[test]
+    fn pin_aliases_are_canonicalized_and_deduplicated() {
+        let entries = DesktopEntries::new(&[("notes.desktop", "Name=Notes\nExec=/bin/true")]);
+        let pins = ["notes", "NOTES.DESKTOP", "notes.desktop"]
+            .map(str::to_string)
+            .to_vec();
+        assert_eq!(sanitize_pins(&entries.catalog(), pins), ["notes.desktop"]);
+    }
+
+    #[test]
+    fn popovers_open_toward_the_inside_of_each_dock_edge() {
+        for (position, expected) in [
+            (Position::Top, gtk4::PositionType::Bottom),
+            (Position::Bottom, gtk4::PositionType::Top),
+            (Position::Left, gtk4::PositionType::Right),
+            (Position::Right, gtk4::PositionType::Left),
+        ] {
+            assert_eq!(
+                DockLayout::from_position(position).popover_position,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn empty_app_ids_do_not_merge_unrelated_untitled_windows() {
+        let windows = ["one", "two"].map(|id| WindowState {
+            id: id.to_string(),
+            app_id: Some(String::new()),
+            title: Some(" ".to_string()),
+            active: false,
+            badge_count: None,
+        });
+        let (known, unknown) = group_windows(&windows, &AppCatalog::default());
+        assert!(
+            known.is_empty(),
+            "windows without identities must remain unknown"
+        );
+        assert_eq!(
+            unknown.len(),
+            2,
+            "unidentified windows must retain distinct dock entries"
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::gdk;
+use gtk::gio;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -86,9 +87,14 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     {
         let state = Rc::clone(state);
         let ctx = ctx.clone();
-        let popover = build_context_menu(Rc::clone(&state), &button, item, autohide, move || {
-            render_all(&ctx)
-        });
+        let popover = build_context_menu(
+            Rc::clone(&state),
+            &button,
+            item,
+            autohide,
+            ctx.popover_position,
+            move || render_all(&ctx),
+        );
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_SECONDARY);
@@ -139,11 +145,12 @@ pub(crate) fn build_context_menu(
     parent: &impl gtk::prelude::IsA<gtk::Widget>,
     item: &DockItem,
     autohide: &Rc<RefCell<autohide::AutoHideState>>,
+    position: gtk::PositionType,
     rerender: impl Fn() + 'static,
 ) -> gtk::Popover {
     let popover = gtk::Popover::new();
     popover.set_has_arrow(false);
-    popover.set_position(gtk::PositionType::Top);
+    popover.set_position(position);
     popover.set_parent(parent);
 
     autohide::install_hover(&popover, autohide);
@@ -334,7 +341,11 @@ pub(crate) struct MenuButton {
     pub(crate) popover: gtk::Popover,
 }
 
-pub(crate) fn build_menu_button(menu_config: &config::MenuConfig, icon_size: i32) -> MenuButton {
+pub(crate) fn build_menu_button(
+    menu_config: &config::MenuConfig,
+    icon_size: i32,
+    position: gtk::PositionType,
+) -> MenuButton {
     let button = gtk::Button::new();
     button.add_css_class("dock-item");
     button.add_css_class("menu-button");
@@ -343,7 +354,7 @@ pub(crate) fn build_menu_button(menu_config: &config::MenuConfig, icon_size: i32
 
     let popover = gtk::Popover::new();
     popover.set_has_arrow(false);
-    popover.set_position(gtk::PositionType::Top);
+    popover.set_position(position);
     popover.set_parent(&button);
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -406,12 +417,14 @@ fn icon_from_name(icon_name: &str, icon_size: i32) -> gtk::Image {
 }
 
 fn execute_command(command: &str) {
-    if let Err(e) = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .spawn()
-    {
-        eprintln!("Failed to execute command '{command}': {e}");
+    // GSubprocess reaps children automatically, even when no caller waits for them.
+    let args = [
+        std::ffi::OsStr::new("sh"),
+        std::ffi::OsStr::new("-c"),
+        std::ffi::OsStr::new(command),
+    ];
+    if let Err(error) = gio::Subprocess::newv(&args, gio::SubprocessFlags::NONE) {
+        eprintln!("Failed to execute command '{command}': {error}");
     }
 }
 

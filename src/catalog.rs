@@ -42,6 +42,8 @@ impl AppRecord {
 }
 
 /// Installed applications indexed by desktop ID and window identity.
+/// The default catalog is empty; use [`Self::load`] to discover installed apps.
+#[derive(Default)]
 pub struct AppCatalog {
     apps: BTreeMap<String, AppRecord>,
     aliases: HashMap<String, String>,
@@ -54,7 +56,7 @@ impl AppCatalog {
         Self::from_apps(gio::AppInfo::all())
     }
 
-    fn from_apps(mut installed: Vec<gio::AppInfo>) -> Self {
+    pub(crate) fn from_apps(mut installed: Vec<gio::AppInfo>) -> Self {
         let mut apps = BTreeMap::new();
         let mut ordered = Vec::new();
         let mut aliases = HashMap::new();
@@ -240,57 +242,8 @@ fn basename(path: impl AsRef<Path>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::AppCatalog;
-    use gio_unix::DesktopAppInfo;
-    use gtk4::gio;
-    use gtk4::prelude::*;
+    use crate::desktop_entries::DesktopEntries;
     use std::collections::HashSet;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(1);
-
-    struct DesktopEntries {
-        directory: PathBuf,
-        apps: Vec<gio::AppInfo>,
-    }
-
-    impl DesktopEntries {
-        fn new(entries: &[(&str, &str)]) -> Self {
-            let directory = std::env::temp_dir().join(format!(
-                "rudo-catalog-test-{}-{}",
-                std::process::id(),
-                NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&directory).expect("test directory must be unique");
-            let apps = entries
-                .iter()
-                .map(|(id, entry)| {
-                    let path = directory.join(id);
-                    fs::write(
-                        &path,
-                        format!("[Desktop Entry]\nType=Application\n{entry}\n"),
-                    )
-                    .expect("desktop fixture must be writable");
-                    DesktopAppInfo::from_filename(path)
-                        .expect("fixture must be a valid desktop entry")
-                        .upcast()
-                })
-                .collect();
-            Self { directory, apps }
-        }
-
-        fn catalog(&self) -> AppCatalog {
-            AppCatalog::from_apps(self.apps.clone())
-        }
-    }
-
-    impl Drop for DesktopEntries {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.directory).expect("test directory must be removable");
-        }
-    }
 
     #[test]
     fn recognizes_obsidian_appimage_by_startup_wm_class() {

@@ -88,6 +88,9 @@ This installs the pre-built binary. No compilation needed.
 - `settings.json`: behavior settings
 - `style.css`: visual overrides
 
+Pins for temporarily unavailable applications are preserved. Their icons stay hidden until the
+launcher becomes available again, at which point they reappear in their saved positions.
+
 Default `settings.json`:
 
 ```json
@@ -195,7 +198,11 @@ binds {
 ```sh
 just fmt
 just check
+cargo test --all-targets
 ```
+
+CI checks formatting, strict Clippy lints, and the test suite on pushes and pull requests. Tests use
+temporary desktop entries and do not require a running graphical session.
 
 ## Status
 
