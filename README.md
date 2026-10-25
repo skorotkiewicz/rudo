@@ -139,6 +139,25 @@ Set `confirm: true` to show a confirmation dialog before executing destructive c
 
 `style.css` is loaded on every start after the built-in theme, so you can override the dock without rebuilding.
 
+### Application recognition
+
+Rudo matches running windows to installed desktop entries using desktop IDs, `StartupWMClass`,
+Flatpak IDs (`X-Flatpak`), executable names, and display names. Desktop IDs and explicit window
+identities take precedence over executable/display-name guesses. Installing or updating a desktop
+entry refreshes the catalog without restarting Rudo.
+
+If an application such as Obsidian appears as a separate, generic running icon:
+
+1. Make sure it has a launcher visible in your desktop's application menu. AppImages need a
+   desktop entry, usually under `~/.local/share/applications/`.
+2. Check the running window's app ID (`niri msg windows` on Niri) against its desktop entry.
+   If they differ, set `StartupWMClass` in the entry to the observed app ID, for example
+   `StartupWMClass=obsidian`. Keep its existing valid `Exec` and `Icon` values.
+
+Rudo does not guess applications from window titles or assume that a generic `electron` app ID
+belongs to Obsidian. Configure the application to advertise a distinct app ID if multiple
+applications use the same one.
+
 ## Autostart (niri)
 
 The GitHub release archive includes `rudo.service`. The `rudo-bin` AUR package installs it as a

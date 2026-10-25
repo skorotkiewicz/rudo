@@ -247,6 +247,7 @@ struct AppRuntime {
     config_changes: ConfigChanges,
     user_css_provider: Option<gtk::CssProvider>,
     monitor_model: Option<gio::ListModel>,
+    app_info_monitor: gio::AppInfoMonitor,
     _config_watch: Option<ConfigWatchState>,
 }
 
@@ -306,6 +307,7 @@ impl AppRuntime {
             config_changes,
             user_css_provider,
             monitor_model,
+            app_info_monitor: gio::AppInfoMonitor::get(),
             _config_watch: config_watch,
         });
 
@@ -336,6 +338,19 @@ impl AppRuntime {
                 ControlFlow::Continue
             });
         }
+
+        let runtime = Rc::downgrade(self);
+        self.app_info_monitor.connect_changed(move |_| {
+            if let Some(runtime) = runtime.upgrade() {
+                let catalog = AppCatalog::load();
+                {
+                    let mut state = runtime.state.borrow_mut();
+                    state.catalog = catalog;
+                    state.reconcile_launching();
+                }
+                render_contexts(&runtime.contexts);
+            }
+        });
 
         if let Some(monitors) = self.monitor_model.as_ref() {
             let runtime = Rc::downgrade(self);
@@ -1037,6 +1052,11 @@ impl ConfigChanges {
     const ALL: u8 = Self::PINS | Self::SETTINGS | Self::STYLE;
 
     fn mark_event(&self, event: &Event) {
+        // Reading a watched file must not schedule another reload of that file.
+        if event.kind.is_access() {
+            return;
+        }
+
         let mut flags = 0;
         for path in &event.paths {
             match path.file_name().and_then(|name| name.to_str()) {
@@ -1104,9 +1124,12 @@ impl Drop for ConfigWatchState {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppCommand, command_from_options, remove_launch_if_current, validate_visibility_args,
+        AppCommand, ConfigChanges, command_from_options, remove_launch_if_current,
+        validate_visibility_args,
     };
     use gtk4::glib;
+    use notify::event::{AccessKind, AccessMode, DataChange, ModifyKind};
+    use notify::{Event, EventKind};
     use std::collections::HashMap;
     use std::time::{Duration, Instant};
 
@@ -1145,6 +1168,34 @@ mod tests {
     fn repeating_the_same_visibility_option_is_allowed() {
         let args = ["rudo", "--show", "--show"].map(str::to_string);
         assert!(validate_visibility_args(&args).is_ok());
+    }
+
+    #[test]
+    fn reading_config_does_not_trigger_another_reload() {
+        let changes = ConfigChanges::default();
+        for kind in [
+            AccessKind::Open(AccessMode::Read),
+            AccessKind::Close(AccessMode::Read),
+        ] {
+            changes
+                .mark_event(&Event::new(EventKind::Access(kind)).add_path("settings.json".into()));
+        }
+        assert_eq!(
+            changes.take(),
+            0,
+            "access events must not create a reload feedback loop"
+        );
+    }
+
+    #[test]
+    fn writing_config_still_triggers_reload() {
+        let changes = ConfigChanges::default();
+        changes.mark_event(
+            &Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                .add_path("settings.json".into()),
+        );
+        assert_eq!(changes.take(), ConfigChanges::SETTINGS);
+        assert_eq!(changes.take(), 0, "pending changes must be consumed once");
     }
 
     #[test]
