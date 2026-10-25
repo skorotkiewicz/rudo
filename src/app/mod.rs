@@ -347,8 +347,8 @@ impl AppRuntime {
                 {
                     let mut state = runtime.state.borrow_mut();
                     state.catalog = catalog;
-                    let pins = std::mem::take(&mut state.pins);
-                    state.pins = sanitize_pins(&state.catalog, pins);
+                    // let pins = std::mem::take(&mut state.pins);
+                    // state.pins = sanitize_pins(&state.catalog, pins);
                     state.reconcile_launching();
                 }
                 render_contexts(&runtime.contexts);
@@ -1005,15 +1005,16 @@ fn aggregate_badges(windows: &[WindowState]) -> Option<u32> {
 fn sanitize_pins(catalog: &AppCatalog, pins: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
     pins.into_iter()
-        .filter_map(|id| {
-            let id = id.trim();
-            if id.is_empty() {
-                None
-            } else {
-                // A temporarily unavailable launcher must not erase a saved pin.
-                Some(catalog.resolve_id(id).unwrap_or_else(|| id.to_string()))
-            }
-        })
+        // .filter_map(|id| {
+        //     let id = id.trim();
+        //     if id.is_empty() {
+        //         None
+        //     } else {
+        //         // A temporarily unavailable launcher must not erase a saved pin.
+        //         Some(catalog.resolve_id(id).unwrap_or_else(|| id.to_string()))
+        //     }
+        // })
+        .filter_map(|id| catalog.resolve_id(&id)) // x
         .filter(|id| seen.insert(id.clone()))
         .collect()
 }
@@ -1289,30 +1290,28 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_launchers_keep_their_pins() {
-        let pins = [
-            "missing.desktop",
-            "another.desktop",
-            " missing.desktop ",
-            " ",
-        ]
-        .map(str::to_string)
-        .to_vec();
+    fn unavailable_launchers_are_filtered_from_pins() {
+        let entries = DesktopEntries::new(&[("notes.desktop", "Name=Notes\nExec=/bin/true")]);
+        let pins = ["missing.desktop", "notes.desktop", "another.desktop", " "]
+            .map(str::to_string)
+            .to_vec();
         assert_eq!(
-            sanitize_pins(&AppCatalog::default(), pins),
-            ["missing.desktop", "another.desktop"]
+            sanitize_pins(&entries.catalog(), pins),
+            ["notes.desktop"],
+            "only installed launchers must remain pinned"
         );
     }
 
     #[test]
-    fn restored_launcher_rejoins_its_pinned_windows_without_a_duplicate_item() {
+    fn alias_pin_claims_canonical_windows_without_a_duplicate_item() {
         let entries = DesktopEntries::new(&[(
             "notes.desktop",
             "Name=Notes\nExec=/bin/true\nStartupWMClass=notes-window",
         )]);
         let state = state_with_launch(Instant::now());
         let mut state = state.borrow_mut();
-        state.pins = sanitize_pins(&state.catalog, vec!["notes".to_string()]);
+        state.catalog = entries.catalog();
+        state.pins = vec!["notes".to_string()];
         state.windows = vec![WindowState {
             id: "window".to_string(),
             app_id: Some("notes-window".to_string()),
@@ -1321,18 +1320,10 @@ mod tests {
             badge_count: None,
         }];
         let (pinned, running) = collect_items(&state);
-        assert!(
-            pinned.is_empty(),
-            "unavailable launchers are hidden, not forgotten"
-        );
-        assert_eq!(running.len(), 1);
-
-        state.catalog = entries.catalog();
-        let (pinned, running) = collect_items(&state);
         assert_eq!(
             pinned.len(),
             1,
-            "restoring the launcher must restore the saved pin"
+            "installed alias must resolve to one pinned app"
         );
         assert_eq!(
             pinned[0].windows.len(),

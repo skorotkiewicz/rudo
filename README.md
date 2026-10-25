@@ -88,9 +88,6 @@ This installs the pre-built binary. No compilation needed.
 - `settings.json`: behavior settings
 - `style.css`: visual overrides
 
-Pins for temporarily unavailable applications are preserved. Their icons stay hidden until the
-launcher becomes available again, at which point they reappear in their saved positions.
-
 Default `settings.json`:
 
 ```json
