@@ -230,6 +230,8 @@ pub(crate) struct RenderContext {
     pub(crate) picker_popover: gtk::Popover,
     pub(crate) popover_position: gtk::PositionType,
     pub(crate) autohide: Rc<RefCell<autohide::AutoHideState>>,
+    monitor: Option<gdk::Monitor>,
+    window_scope: config::WindowScope,
     // GTK callbacks share the per-view cache through cloned render contexts.
     renderer: Rc<RefCell<dock_renderer::DockRenderer>>,
     contexts: Weak<RefCell<Vec<RenderContext>>>,
@@ -238,6 +240,7 @@ pub(crate) struct RenderContext {
 struct DockView {
     window: gtk::ApplicationWindow,
     ctx: RenderContext,
+    monitor_handler: Option<glib::SignalHandlerId>,
 }
 
 struct AppRuntime {
@@ -503,6 +506,11 @@ impl AppRuntime {
 
         let old_views = self.views.replace(new_views);
         for view in old_views {
+            if let Some(handler) = view.monitor_handler
+                && let Some(monitor) = view.ctx.monitor.as_ref()
+            {
+                monitor.disconnect(handler);
+            }
             autohide::cancel_pending_hide(&view.ctx.autohide);
             view.ctx.renderer.borrow_mut().clear();
             clear_children(&view.ctx.items_box);
@@ -663,6 +671,10 @@ fn build_view(
         picker_popover: picker_popover.clone(),
         popover_position: layout.popover_position,
         autohide: Rc::clone(&autohide),
+        monitor: monitor
+            .filter(|_| gtk4_layer_shell::is_supported())
+            .cloned(),
+        window_scope: settings.window_scope,
         renderer: Rc::new(RefCell::new(dock_renderer::DockRenderer::default())),
         contexts,
     };
@@ -725,7 +737,15 @@ fn build_view(
 
     autohide::schedule_hide(&autohide);
 
-    DockView { window, ctx }
+    let monitor_handler = ctx.monitor.as_ref().map(|monitor| {
+        let contexts = ctx.contexts.clone();
+        monitor.connect_connector_notify(move |_| render_registered(&contexts))
+    });
+    DockView {
+        window,
+        ctx,
+        monitor_handler,
+    }
 }
 
 pub(crate) fn render_all(ctx: &RenderContext) {
@@ -793,9 +813,13 @@ fn remove_launch_if_current(
 }
 
 fn render_dock(ctx: &RenderContext) {
+    let output = match ctx.window_scope {
+        config::WindowScope::All => None,
+        config::WindowScope::CurrentMonitor => ctx.monitor.as_ref().and_then(|m| m.connector()),
+    };
     let (pinned_items, running_items) = {
         let dock_state = ctx.state.borrow();
-        collect_items(&dock_state)
+        collect_items(&dock_state, output.as_deref())
     };
     let refresh_picker = {
         let mut renderer = ctx.renderer.borrow_mut();
@@ -851,12 +875,8 @@ pub(crate) fn icon_widget(app: Option<&AppRecord>, icon_size: i32) -> gtk::Image
     image
 }
 
-fn collect_items(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
-    collect_items_flat(state)
-}
-
-fn group_windows(
-    windows: &[WindowState],
+fn group_windows<'a>(
+    windows: impl IntoIterator<Item = &'a WindowState>,
     catalog: &AppCatalog,
 ) -> (
     BTreeMap<String, Vec<WindowState>>,
@@ -933,8 +953,16 @@ fn build_unknown_items(unknown: BTreeMap<String, Vec<WindowState>>) -> Vec<DockI
     items
 }
 
-fn collect_items_flat(state: &DockState) -> (Vec<DockItem>, Vec<DockItem>) {
-    let (mut known, unknown) = group_windows(&state.windows, &state.catalog);
+fn collect_items(state: &DockState, output: Option<&str>) -> (Vec<DockItem>, Vec<DockItem>) {
+    let windows = state.windows.iter().filter(|window| {
+        output.is_none_or(|name| {
+            window
+                .outputs
+                .as_ref()
+                .is_none_or(|outputs| outputs.iter().any(|output| output == name))
+        })
+    });
+    let (mut known, unknown) = group_windows(windows, &state.catalog);
     let pinned = build_pinned_items(state, &mut known);
     let mut running = build_running_items(known, state);
     running.extend(build_unknown_items(unknown));
@@ -1311,8 +1339,9 @@ mod tests {
             title: Some("A note".to_string()),
             active: true,
             badge_count: None,
+            outputs: None,
         }];
-        let (pinned, running) = collect_items(&state);
+        let (pinned, running) = collect_items(&state, None);
         assert_eq!(
             pinned.len(),
             1,
@@ -1326,6 +1355,95 @@ mod tests {
         assert!(
             running.is_empty(),
             "the pinned app must not also appear as an unpinned app"
+        );
+    }
+
+    fn monitor_window(id: &str, app_id: &str, output: Option<&str>) -> WindowState {
+        WindowState {
+            id: id.to_string(),
+            app_id: Some(app_id.to_string()),
+            title: Some(id.to_string()),
+            active: false,
+            badge_count: None,
+            outputs: output.map(|name| vec![name.to_string()]),
+        }
+    }
+
+    #[test]
+    fn monitor_filter_preserves_pins_and_scopes_window_actions_and_indicators() {
+        let entries = DesktopEntries::new(&[
+            ("notes.desktop", "Name=Notes\nExec=/bin/true"),
+            ("tools.desktop", "Name=Tools\nExec=/bin/true"),
+        ]);
+        let mut local = monitor_window("local-note", "notes", Some("DP-1"));
+        local.badge_count = Some(2);
+        let mut remote = monitor_window("remote-note", "notes", Some("DP-2"));
+        remote.active = true;
+        remote.badge_count = Some(7);
+        let mut spanning = monitor_window("spanning", "wide-app", Some("DP-1"));
+        spanning.outputs = Some(vec!["DP-1".to_string(), "DP-2".to_string()]);
+        let mut offscreen = monitor_window("offscreen", "offscreen-app", None);
+        offscreen.outputs = Some(Vec::new());
+        let mut state = DockState {
+            catalog: entries.catalog(),
+            pins: vec!["notes.desktop".to_string(), "tools.desktop".to_string()],
+            windows: vec![
+                local,
+                remote,
+                monitor_window("remote-tool", "tools", Some("DP-2")),
+                monitor_window("local-other", "other-app", Some("DP-1")),
+                monitor_window("unknown", "unknown-output", None),
+                spanning,
+                offscreen,
+            ],
+            backend: None,
+            launching: HashMap::new(),
+            icon_size: 24,
+        };
+        let (pinned, running) = collect_items(&state, Some("DP-1"));
+        assert_eq!(pinned.len(), 2, "pins must remain visible on every monitor");
+        assert_eq!(pinned[0].windows.len(), 1);
+        assert_eq!(pinned[0].windows[0].id, "local-note");
+        assert_eq!(pinned[0].badge_count, Some(2));
+        assert!(!pinned[0].active, "focus on another monitor must not leak");
+        assert!(
+            pinned[1].windows.is_empty(),
+            "remote-only pins act as launchers"
+        );
+        assert_eq!(
+            running
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["other-app", "unknown-output", "wide-app"],
+            "include local, spanning, and unknown-output windows, but not offscreen windows"
+        );
+        let (pinned, running) = collect_items(&state, Some("DP-2"));
+        assert_eq!(pinned[0].windows[0].id, "remote-note");
+        assert_eq!(pinned[0].badge_count, Some(7));
+        assert!(
+            pinned[0].active,
+            "the focused window belongs to this monitor"
+        );
+        assert_eq!(pinned[1].windows[0].id, "remote-tool");
+        assert_eq!(running.len(), 2);
+        let (pinned, running) = collect_items(&state, None);
+        assert_eq!(
+            pinned[0].windows.len(),
+            2,
+            "global mode must preserve all windows"
+        );
+        assert_eq!(
+            running.len(),
+            4,
+            "global mode also retains offscreen windows"
+        );
+
+        state.windows[3].outputs = Some(vec!["DP-2".to_string()]);
+        let (_, running) = collect_items(&state, Some("DP-1"));
+        assert!(
+            running.iter().all(|item| item.label != "other-app"),
+            "moving a window must remove it from its old monitor's dock"
         );
     }
 
@@ -1361,6 +1479,7 @@ mod tests {
             title: Some(" ".to_string()),
             active: false,
             badge_count: None,
+            outputs: None,
         });
         let (known, unknown) = group_windows(&windows, &AppCatalog::default());
         assert!(

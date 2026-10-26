@@ -312,6 +312,7 @@ mod tests {
                         title: Some(id.to_string()),
                         active: false,
                         badge_count: None,
+                        outputs: None,
                     })
                     .to_vec(),
                 backend: None,
@@ -323,6 +324,8 @@ mod tests {
             picker_list: gtk::Box::new(gtk::Orientation::Vertical, 0),
             picker_popover: gtk::Popover::new(),
             popover_position: gtk::PositionType::Top,
+            monitor: None,
+            window_scope: crate::config::WindowScope::All,
             autohide: Rc::new(RefCell::new(autohide::AutoHideState::new(
                 &revealer,
                 false, // Autohide is disabled for deterministic widget assertions.
@@ -446,6 +449,7 @@ mod tests {
             title: Some("Changed during drag".to_string()),
             active: true,
             badge_count: None,
+            outputs: None,
         });
         render_dock(&ctx);
         assert_eq!(

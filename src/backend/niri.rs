@@ -97,6 +97,7 @@ fn read_event_stream(mut stream: UnixStream, events: &EventMailbox) -> Result<()
     }
 
     let mut windows = BTreeMap::<u64, Window>::new();
+    let mut workspaces = BTreeMap::<u64, Workspace>::new();
     let mut logged_invalid_event = false;
 
     loop {
@@ -119,36 +120,51 @@ fn read_event_stream(mut stream: UnixStream, events: &EventMailbox) -> Result<()
             }
         };
 
-        match event {
-            Event::WindowsChanged { windows: snapshot } => {
-                windows = snapshot
-                    .into_iter()
-                    .map(|window| (window.id, window))
-                    .collect();
-                publish_snapshot(events, &windows);
-            }
-            Event::WindowOpenedOrChanged { window } => {
-                if window.is_focused {
-                    for w in windows.values_mut() {
-                        w.is_focused = false;
-                    }
-                }
-                windows.insert(window.id, window);
-                publish_snapshot(events, &windows);
-            }
-            Event::WindowClosed { id } => {
-                windows.remove(&id);
-                publish_snapshot(events, &windows);
-            }
-            Event::WindowFocusChanged { id } => {
-                for (window_id, window) in &mut windows {
-                    window.is_focused = Some(*window_id) == id;
-                }
-                publish_snapshot(events, &windows);
-            }
-            Event::Other => {}
-        }
+        apply_event(event, events, &mut windows, &mut workspaces);
     }
+}
+
+fn apply_event(
+    event: Event,
+    events: &EventMailbox,
+    windows: &mut BTreeMap<u64, Window>,
+    workspaces: &mut BTreeMap<u64, Workspace>,
+) {
+    match event {
+        Event::WorkspacesChanged {
+            workspaces: snapshot,
+        } => {
+            // This is a full replacement, including workspace moves between outputs.
+            *workspaces = snapshot
+                .into_iter()
+                .map(|workspace| (workspace.id, workspace))
+                .collect();
+        }
+        Event::WindowsChanged { windows: snapshot } => {
+            *windows = snapshot
+                .into_iter()
+                .map(|window| (window.id, window))
+                .collect();
+        }
+        Event::WindowOpenedOrChanged { window } => {
+            if window.is_focused {
+                for w in windows.values_mut() {
+                    w.is_focused = false;
+                }
+            }
+            windows.insert(window.id, window);
+        }
+        Event::WindowClosed { id } => {
+            windows.remove(&id);
+        }
+        Event::WindowFocusChanged { id } => {
+            for (window_id, window) in windows.iter_mut() {
+                window.is_focused = Some(*window_id) == id;
+            }
+        }
+        Event::Other => return,
+    }
+    publish_snapshot(events, windows, workspaces);
 }
 
 fn command_loop(socket_path: &PathBuf, rx: &std::sync::mpsc::Receiver<BackendRequest>) {
@@ -186,7 +202,11 @@ fn command_loop(socket_path: &PathBuf, rx: &std::sync::mpsc::Receiver<BackendReq
     }
 }
 
-fn publish_snapshot(events: &EventMailbox, windows: &BTreeMap<u64, Window>) {
+fn publish_snapshot(
+    events: &EventMailbox,
+    windows: &BTreeMap<u64, Window>,
+    workspaces: &BTreeMap<u64, Workspace>,
+) {
     let snapshot = windows
         .values()
         .map(|window| WindowState {
@@ -195,6 +215,12 @@ fn publish_snapshot(events: &EventMailbox, windows: &BTreeMap<u64, Window>) {
             title: window.title.clone(),
             active: window.is_focused,
             badge_count: None,
+            // Missing workspace metadata is transiently possible during snapshots.
+            // A known workspace with no output means no outputs are connected.
+            outputs: window
+                .workspace_id
+                .and_then(|id| workspaces.get(&id))
+                .map(|workspace| workspace.output.iter().cloned().collect()),
         })
         .collect();
     events.publish(snapshot);
@@ -232,6 +258,9 @@ enum Response {
 
 #[derive(Debug, Deserialize)]
 enum Event {
+    WorkspacesChanged {
+        workspaces: Vec<Workspace>,
+    },
     WindowsChanged {
         windows: Vec<Window>,
     },
@@ -254,6 +283,13 @@ struct Window {
     title: Option<String>,
     app_id: Option<String>,
     is_focused: bool,
+    workspace_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Workspace {
+    id: u64,
+    output: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,12 +306,82 @@ enum Action {
 
 #[cfg(test)]
 mod tests {
-    use super::{NiriError, event_session};
+    use super::{NiriError, apply_event, event_session};
     use crate::backend::EventMailbox;
+    use crate::model::WindowState;
+    use std::collections::BTreeMap;
     use std::io::Write;
     use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
+
+    const WORKSPACES: &str = r#"{"WorkspacesChanged":{"workspaces":[{"id":1,"output":"DP-1"},{"id":2,"output":"HDMI-A-1"}]}}"#;
+    const WINDOWS: &str = r#"{"WindowsChanged":{"windows":[{"id":7,"title":"Notes","app_id":"obsidian","is_focused":true,"workspace_id":1}]}}"#;
+
+    fn replay(json_events: &[&str]) -> Vec<WindowState> {
+        let events = EventMailbox::default();
+        let mut windows = BTreeMap::new();
+        let mut workspaces = BTreeMap::new();
+        json_events
+            .iter()
+            .map(|json| {
+                let event =
+                    serde_json::from_str(json).expect("test event must match the IPC schema");
+                apply_event(event, &events, &mut windows, &mut workspaces);
+                events
+                    .take_latest()
+                    .expect("each state-changing event must republish a snapshot")
+            })
+            .last()
+            .expect("test must supply at least one event")
+    }
+
+    #[test]
+    fn window_move_updates_output() {
+        let moved = r#"{"WindowOpenedOrChanged":{"window":{"id":7,"title":"Notes","app_id":"obsidian","is_focused":true,"workspace_id":2}}}"#;
+        let snapshot = replay(&[WORKSPACES, WINDOWS, moved]);
+        assert_eq!(snapshot[0].outputs, Some(vec!["HDMI-A-1".into()]));
+        assert_eq!(snapshot[0].id, "niri-7");
+        assert_eq!(snapshot[0].app_id.as_deref(), Some("obsidian"));
+        assert_eq!(snapshot[0].title.as_deref(), Some("Notes"));
+        assert!(
+            snapshot[0].active,
+            "moving a focused window must preserve focus"
+        );
+    }
+
+    #[test]
+    fn workspace_move_updates_existing_windows() {
+        let moved = r#"{"WorkspacesChanged":{"workspaces":[{"id":1,"output":"HDMI-A-1"},{"id":2,"output":"DP-1"}]}}"#;
+        assert_eq!(
+            replay(&[WORKSPACES, WINDOWS, moved])[0].outputs,
+            Some(vec!["HDMI-A-1".into()])
+        );
+    }
+
+    #[test]
+    fn unknown_workspace_metadata_falls_back_to_global() {
+        let missing_id = r#"{"WindowsChanged":{"windows":[{"id":7,"title":null,"app_id":null,"is_focused":false}]}}"#;
+        let null_id = r#"{"WindowOpenedOrChanged":{"window":{"id":7,"title":null,"app_id":null,"is_focused":false,"workspace_id":null}}}"#;
+        let removed = r#"{"WorkspacesChanged":{"workspaces":[]}}"#;
+        assert_eq!(replay(&[WINDOWS])[0].outputs, None);
+        assert_eq!(replay(&[WORKSPACES, missing_id])[0].outputs, None);
+        assert_eq!(replay(&[WORKSPACES, WINDOWS, null_id])[0].outputs, None);
+        assert_eq!(replay(&[WORKSPACES, WINDOWS, removed])[0].outputs, None);
+    }
+
+    #[test]
+    fn known_workspace_without_output_has_empty_membership() {
+        let no_output = r#"{"WorkspacesChanged":{"workspaces":[{"id":1,"output":null}]}}"#;
+        assert_eq!(replay(&[WINDOWS, no_output])[0].outputs, Some(Vec::new()));
+    }
+
+    #[test]
+    fn initial_snapshots_resolve_membership_in_either_order() {
+        for order in [[WORKSPACES, WINDOWS], [WINDOWS, WORKSPACES]] {
+            assert_eq!(replay(&order)[0].outputs, Some(vec!["DP-1".into()]));
+        }
+    }
 
     #[test]
     fn disconnect_clears_previously_published_windows() {

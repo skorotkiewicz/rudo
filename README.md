@@ -61,6 +61,7 @@ Here’s a look at `settings.json`:
   "icon_size": 24,
   "position": "bottom",
   "outputs": "first",
+  "window_scope": "all",
   "animation_duration_ms": 220,
   "menu": {
     "enabled": false,
@@ -76,9 +77,10 @@ Here’s a look at `settings.json`:
 
 *   **position**: `"bottom"`, `"top"`, `"left"`, or `"right"`.
 *   **outputs**: `"first"` (one dock) or `"all"` (one dock per monitor).
+*   **window_scope**: `"all"` (default: windows from every monitor) or `"current_monitor"` (only windows on each dock's monitor). Pins stay visible everywhere; running indicators and window actions use the filtered list.
 *   **menu**: Add custom actions or a power menu. Set `"confirm": true` for destructive commands so you don't accidentally reboot!
 
-Settings and monitor changes apply instantly while Rudo is running. Note: Filtering windows by the current monitor isn't supported by the backends yet, so all docks share the same global window list.
+Settings and monitor changes apply automatically while Rudo is running. Per-monitor filtering uses Niri workspace/output information or Wayland toplevel output membership. Windows spanning multiple outputs appear on each matching dock. If a window's output or the dock's monitor cannot be identified, Rudo keeps those windows visible rather than hiding them; older compositors without output names may therefore show a global list.
 
 ### App Recognition
 

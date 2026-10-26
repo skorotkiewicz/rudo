@@ -123,6 +123,7 @@ mod tests {
             title: None,
             active: false,
             badge_count: None,
+            outputs: None,
         }]
     }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
@@ -11,7 +12,7 @@ use wayland_client::protocol::{
     wl_registry::{self, WlRegistry},
     wl_seat::{self, WlSeat},
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
     zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
@@ -84,6 +85,7 @@ impl WaylandSession {
             manager: None,
             manager_finished: false,
             windows: HashMap::new(),
+            outputs: HashMap::new(),
             next_id,
         };
 
@@ -227,6 +229,7 @@ struct WaylandState {
     manager: Option<ZwlrForeignToplevelManagerV1>,
     manager_finished: bool,
     windows: HashMap<ZwlrForeignToplevelHandleV1, ToplevelState>,
+    outputs: HashMap<WlOutput, Option<String>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -237,6 +240,7 @@ struct ToplevelState {
     title: Option<String>,
     active: bool,
     badge_count: Option<u32>,
+    outputs: Option<Vec<WlOutput>>,
 }
 
 impl WaylandState {
@@ -250,6 +254,7 @@ impl WaylandState {
                 title: window.title.clone(),
                 active: window.active,
                 badge_count: window.badge_count,
+                outputs: resolve_output_names(window.outputs.as_deref(), &self.outputs),
             })
             .collect();
         self.events.publish(snapshot);
@@ -279,11 +284,32 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
                     (),
                 );
                 state.manager = Some(manager);
+            } else if interface == "wl_output" {
+                let output = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, name);
+                state.outputs.insert(output, None);
             } else if interface == "wl_seat" {
                 let seat = registry.bind::<WlSeat, _, _>(name, version.min(9), qh, ());
                 if let Ok(mut control) = state.control.lock() {
                     control.seat.get_or_insert(seat);
                 }
+            }
+        } else if let wl_registry::Event::GlobalRemove { name } = event {
+            let removed = state
+                .outputs
+                .keys()
+                .find(|output| output.data::<u32>() == Some(&name))
+                .cloned();
+            if let Some(output) = removed {
+                state.outputs.remove(&output);
+                for window in state.windows.values_mut() {
+                    if let Some(outputs) = window.outputs.as_mut() {
+                        outputs.retain(|current| current != &output);
+                    }
+                }
+                if output.version() >= 3 {
+                    output.release();
+                }
+                state.publish_snapshot();
             }
         }
     }
@@ -315,16 +341,24 @@ impl Dispatch<WlSeat, ()> for WaylandState {
     }
 }
 
-impl Dispatch<WlOutput, ()> for WaylandState {
+impl Dispatch<WlOutput, u32> for WaylandState {
     fn event(
-        _: &mut Self,
-        _: &WlOutput,
-        _: wl_output::Event,
-        _: &(),
+        state: &mut Self,
+        output: &WlOutput,
+        event: wl_output::Event,
+        _: &u32,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Output events not used by this dock implementation
+        match event {
+            wl_output::Event::Name { name } => {
+                if let Some(current) = state.outputs.get_mut(output) {
+                    *current = (!name.is_empty()).then_some(name);
+                }
+            }
+            wl_output::Event::Done => state.publish_snapshot(),
+            _ => {}
+        }
     }
 }
 
@@ -349,6 +383,7 @@ impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WaylandState {
                         title: None,
                         active: false,
                         badge_count: None,
+                        outputs: None,
                     },
                 );
 
@@ -393,6 +428,18 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
                 window.active = decode_states(&states)
                     .any(|value| value == zwlr_foreign_toplevel_handle_v1::State::Activated as u32);
             }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                let outputs = window.outputs.get_or_insert_with(Vec::new);
+                if !outputs.contains(&output) {
+                    outputs.push(output);
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
+                window
+                    .outputs
+                    .get_or_insert_with(Vec::new)
+                    .retain(|current| current != &output);
+            }
             zwlr_foreign_toplevel_handle_v1::Event::Done => state.publish_snapshot(),
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 let removed = state.windows.remove(handle);
@@ -413,6 +460,19 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
     }
 }
 
+fn resolve_output_names<K: Eq + Hash>(
+    outputs: Option<&[K]>,
+    names: &HashMap<K, Option<String>>,
+) -> Option<Vec<String>> {
+    let mut resolved = outputs?
+        .iter()
+        .map(|output| names.get(output)?.clone())
+        .collect::<Option<Vec<_>>>()?;
+    resolved.sort_unstable();
+    resolved.dedup();
+    Some(resolved)
+}
+
 fn decode_states(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
     bytes
         .as_chunks::<4>()
@@ -424,7 +484,35 @@ fn decode_states(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_states;
+    use super::{decode_states, resolve_output_names};
+    use std::collections::HashMap;
+
+    #[test]
+    fn resolves_output_membership_without_hiding_unknown_windows() {
+        let mut names = HashMap::from([
+            (1, Some("DP-1".to_string())),
+            (2, Some("HDMI-A-1".to_string())),
+            (3, None),
+        ]);
+        assert_eq!(resolve_output_names::<u32>(None, &names), None);
+        assert_eq!(resolve_output_names(Some(&[]), &names), Some(vec![]));
+        assert_eq!(
+            resolve_output_names(Some(&[2, 1, 1]), &names),
+            Some(vec!["DP-1".to_string(), "HDMI-A-1".to_string()])
+        );
+        assert_eq!(
+            resolve_output_names(Some(&[1, 3]), &names),
+            None,
+            "partially named outputs must use the global fallback"
+        );
+        names.insert(3, Some("DP-2".to_string()));
+        assert_eq!(
+            resolve_output_names(Some(&[3]), &names),
+            Some(vec!["DP-2".to_string()])
+        );
+        names.remove(&3);
+        assert_eq!(resolve_output_names(Some(&[3]), &names), None);
+    }
 
     #[test]
     fn decodes_native_endian_states_and_ignores_incomplete_tail() {

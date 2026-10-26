@@ -5,6 +5,8 @@ pub struct WindowState {
     pub title: Option<String>,
     pub active: bool,
     pub badge_count: Option<u32>,
+    /// Connector names for this window; `None` means unknown, an empty list means no output.
+    pub outputs: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug)]

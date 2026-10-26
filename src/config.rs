@@ -41,6 +41,8 @@ pub struct Settings {
     pub icon_size: i32,
     pub position: Position,
     pub outputs: OutputMode,
+    /// Which running windows each dock displays.
+    pub window_scope: WindowScope,
     pub animation_duration_ms: u32,
     pub menu: MenuConfig,
 }
@@ -69,6 +71,7 @@ impl Default for Settings {
             icon_size: 24,
             position: Position::default(),
             outputs: OutputMode::default(),
+            window_scope: WindowScope::default(),
             animation_duration_ms: 220,
             menu: MenuConfig::default(),
         }
@@ -91,6 +94,19 @@ pub enum OutputMode {
     First,
     #[serde(rename = "all")]
     All,
+}
+
+/// Selects whether running windows are shared across monitors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum WindowScope {
+    /// Show windows from all monitors, preserving the default behavior.
+    #[default]
+    #[serde(rename = "all")]
+    All,
+    /// Show only windows on the dock's monitor when their outputs are known.
+    #[serde(rename = "current_monitor")]
+    CurrentMonitor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,7 +323,7 @@ const DEFAULT_STYLE_CSS: &str = r"/* Rudo user overrides
 
 #[cfg(test)]
 mod tests {
-    use super::{OutputMode, PinStore, Settings, atomic_write};
+    use super::{OutputMode, PinStore, Settings, WindowScope, atomic_write};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -337,6 +353,27 @@ mod tests {
         assert_eq!(settings.outputs, OutputMode::All);
         assert_eq!(settings.icon_size, 8);
         assert_eq!(settings.animation_duration_ms, 10_000);
+    }
+
+    #[test]
+    fn window_scope_is_optional_and_defaults_to_all() {
+        let settings: Settings = serde_json::from_str("{}").expect("empty settings use defaults");
+        assert_eq!(settings.window_scope, WindowScope::All);
+    }
+
+    #[test]
+    fn settings_support_current_monitor_windows() {
+        let settings: Settings = serde_json::from_str(r#"{"window_scope":"current_monitor"}"#)
+            .expect("current_monitor is a supported window scope");
+        assert_eq!(settings.window_scope, WindowScope::CurrentMonitor);
+        assert_eq!(
+            serde_json::to_value(&settings).expect("settings must serialize")["window_scope"],
+            "current_monitor"
+        );
+        assert!(
+            serde_json::from_str::<Settings>(r#"{"window_scope":"invalid"}"#).is_err(),
+            "invalid window scopes must not silently change behavior"
+        );
     }
 
     #[test]
