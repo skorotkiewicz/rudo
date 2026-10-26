@@ -5,6 +5,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use crate::catalog::AppRecord;
 use crate::config;
 
 use super::{RenderContext, autohide, render_all};
@@ -13,17 +14,30 @@ pub(crate) fn install_pin_drag_and_drop(
     wrapper: &gtk::Box,
     overlay: &gtk::Overlay,
     ctx: &RenderContext,
-    pin_id: &str,
+    app: &AppRecord,
 ) {
+    wrapper.add_css_class("dock-pin");
     let drag_source = gtk::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE);
-    let source_pin = pin_id.to_string();
+    let source_pin = app.id.clone();
     drag_source.connect_prepare(move |_, _, _| {
         Some(gdk::ContentProvider::for_value(&source_pin.to_value()))
     });
     {
         let autohide = Rc::downgrade(&ctx.autohide);
-        drag_source.connect_drag_begin(move |_, _| {
+        let wrapper = wrapper.downgrade();
+        let app = app.clone();
+        let icon_size = ctx.state.borrow().icon_size;
+        drag_source.connect_drag_begin(move |_, drag| {
+            // The desktop ID remains the payload, but the user drags an app icon.
+            let preview = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            preview.add_css_class("dock-drag-preview");
+            preview.append(&super::icon_widget(Some(&app), icon_size));
+            gtk::DragIcon::for_drag(drag).set_child(Some(&preview));
+            drag.set_hotspot(icon_size / 2 + 8, icon_size / 2 + 8);
+            if let Some(wrapper) = wrapper.upgrade() {
+                wrapper.add_css_class("is-dragging");
+            }
             if let Some(autohide) = autohide.upgrade() {
                 autohide::begin_drag(&autohide);
             }
@@ -31,9 +45,13 @@ pub(crate) fn install_pin_drag_and_drop(
     }
     {
         let ctx = ctx.clone();
+        let wrapper = wrapper.downgrade();
         // drag-end also runs for cancelled drags. Wait until GTK finishes its
         // signal handlers before applying updates that may replace the source.
         drag_source.connect_drag_end(move |_, _, _| {
+            if let Some(wrapper) = wrapper.upgrade() {
+                wrapper.remove_css_class("is-dragging");
+            }
             let ctx = ctx.clone();
             glib::idle_add_local_once(move || {
                 autohide::end_drag(&ctx.autohide);
@@ -102,7 +120,7 @@ pub(crate) fn install_pin_drag_and_drop(
 
     {
         let ctx = ctx.clone();
-        let target_pin = pin_id.to_string();
+        let target_pin = app.id.clone();
         let wrapper = wrapper.downgrade();
         let marker = marker.downgrade();
 

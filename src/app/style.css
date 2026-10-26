@@ -30,10 +30,31 @@
     border-color: rgba(255, 255, 255, 0.12);
 }
 
+.dock-drag-preview {
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(38, 46, 60, 0.94);
+}
+
+.dock-pin.is-dragging {
+    opacity: 0.35;
+}
+
+.dock-pin:drop(active) {
+    outline: none;
+    box-shadow: none;
+}
+
+.dock-pin.is-dragging .dock-item,
+.dock-pin:drop(active) .dock-item {
+    border-color: transparent;
+}
+
 .dock-drop-marker {
     min-width: 2px;
     border-radius: 1px;
-    background: #ffd166;
+    background: #23c9f2;
+    box-shadow: 0 0 6px rgba(35, 201, 242, 0.8);
 }
 
 /* Center the overlay line in the 10px gap without changing item allocation. */

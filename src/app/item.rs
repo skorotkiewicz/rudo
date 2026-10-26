@@ -147,7 +147,7 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     if item.pinned
         && let Some(app) = item.app.as_ref()
     {
-        super::dnd::install_pin_drag_and_drop(&wrapper, &overlay, ctx, &app.id);
+        super::dnd::install_pin_drag_and_drop(&wrapper, &overlay, ctx, app);
     }
 
     wrapper
