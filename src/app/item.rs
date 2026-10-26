@@ -87,6 +87,7 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
     {
         let state = Rc::clone(state);
         let ctx = ctx.clone();
+        let contexts = ctx.contexts.clone();
         let popover = build_context_menu(
             Rc::clone(&state),
             &button,
@@ -95,6 +96,14 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
             ctx.popover_position,
             move || render_all(&ctx),
         );
+
+        // Deferred item updates become safe once the menu has actually hidden.
+        popover.connect_visible_notify(move |popover| {
+            if !popover.is_visible() {
+                let contexts = contexts.clone();
+                glib::idle_add_local_once(move || super::render_registered(&contexts));
+            }
+        });
 
         let gesture = gtk::GestureClick::new();
         gesture.set_button(gdk::BUTTON_SECONDARY);

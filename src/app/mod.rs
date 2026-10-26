@@ -21,6 +21,7 @@ use crate::model::WindowState;
 mod autohide;
 mod css;
 mod dnd;
+mod dock_renderer;
 mod item;
 mod picker;
 
@@ -164,7 +165,7 @@ fn ensure_runtime(
     runtime
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct DockItem {
     pub(crate) label: String,
     pub(crate) tooltip: String,
@@ -229,6 +230,8 @@ pub(crate) struct RenderContext {
     pub(crate) picker_popover: gtk::Popover,
     pub(crate) popover_position: gtk::PositionType,
     pub(crate) autohide: Rc<RefCell<autohide::AutoHideState>>,
+    // GTK callbacks share the per-view cache through cloned render contexts.
+    renderer: Rc<RefCell<dock_renderer::DockRenderer>>,
     contexts: Weak<RefCell<Vec<RenderContext>>>,
 }
 
@@ -352,6 +355,9 @@ impl AppRuntime {
                     state.reconcile_launching();
                 }
                 render_contexts(&runtime.contexts);
+                for ctx in runtime.contexts.borrow().iter() {
+                    refresh_visible_picker(ctx);
+                }
             }
         });
 
@@ -498,6 +504,7 @@ impl AppRuntime {
         let old_views = self.views.replace(new_views);
         for view in old_views {
             autohide::cancel_pending_hide(&view.ctx.autohide);
+            view.ctx.renderer.borrow_mut().clear();
             clear_children(&view.ctx.items_box);
             cleanup_widget_tree(view.window.upcast_ref());
             view.window.close();
@@ -656,6 +663,7 @@ fn build_view(
         picker_popover: picker_popover.clone(),
         popover_position: layout.popover_position,
         autohide: Rc::clone(&autohide),
+        renderer: Rc::new(RefCell::new(dock_renderer::DockRenderer::default())),
         contexts,
     };
 
@@ -789,32 +797,17 @@ fn render_dock(ctx: &RenderContext) {
         let dock_state = ctx.state.borrow();
         collect_items(&dock_state)
     };
-    let show_separator = !pinned_items.is_empty() && !running_items.is_empty();
-
-    clear_children(&ctx.items_box);
-
-    for item in &pinned_items {
-        ctx.items_box.append(&item::build_item_widget(ctx, item));
+    let refresh_picker = {
+        let mut renderer = ctx.renderer.borrow_mut();
+        renderer.render(ctx, &pinned_items, &running_items);
+        renderer.pins_changed(&ctx.state.borrow().pins)
+    };
+    if refresh_picker {
+        refresh_visible_picker(ctx);
     }
+}
 
-    if show_separator {
-        let sep_orientation = match ctx.items_box.orientation() {
-            gtk::Orientation::Horizontal => gtk::Orientation::Vertical,
-            gtk::Orientation::Vertical => gtk::Orientation::Horizontal,
-            _ => unreachable!(),
-        };
-        let separator = gtk::Separator::new(sep_orientation);
-        separator.add_css_class("dock-separator");
-        if sep_orientation == gtk::Orientation::Horizontal {
-            separator.add_css_class("is-vertical");
-        }
-        ctx.items_box.append(&separator);
-    }
-
-    for item in &running_items {
-        ctx.items_box.append(&item::build_item_widget(ctx, item));
-    }
-
+fn refresh_visible_picker(ctx: &RenderContext) {
     if ctx.picker_popover.is_visible() {
         picker::render_picker(
             &ctx.state,

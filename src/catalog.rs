@@ -19,7 +19,7 @@ enum MatchQuality {
 }
 
 /// A launchable desktop application.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct AppRecord {
     /// Canonical desktop file ID, including the `.desktop` suffix.
     pub id: String,
