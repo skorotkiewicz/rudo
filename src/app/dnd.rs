@@ -11,7 +11,7 @@ use super::{RenderContext, autohide, render_all};
 
 pub(crate) fn install_pin_drag_and_drop(
     wrapper: &gtk::Box,
-    highlight: &gtk::Button,
+    overlay: &gtk::Overlay,
     ctx: &RenderContext,
     pin_id: &str,
 ) {
@@ -43,23 +43,59 @@ pub(crate) fn install_pin_drag_and_drop(
     }
     wrapper.add_controller(drag_source);
 
-    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
-
-    {
-        let highlight = highlight.downgrade();
-        drop_target.connect_enter(move |_, _, _| {
-            if let Some(highlight) = highlight.upgrade() {
-                highlight.add_css_class("is-drop-target");
-            }
-            gdk::DragAction::MOVE
-        });
+    let orientation = ctx.items_box.orientation();
+    let marker = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    marker.add_css_class("dock-drop-marker");
+    marker.set_can_target(false);
+    marker.set_visible(false);
+    if orientation == gtk::Orientation::Horizontal {
+        marker.set_valign(gtk::Align::Fill);
+    } else {
+        marker.add_css_class("is-horizontal");
+        marker.set_halign(gtk::Align::Fill);
     }
+    // Overlay the line in the gap without moving icons or their drop targets.
+    overlay.set_overflow(gtk::Overflow::Visible);
+    overlay.add_overlay(&marker);
+
+    let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+    let update_marker = {
+        let wrapper = wrapper.downgrade();
+        let marker = marker.downgrade();
+        move |_: &gtk::DropTarget, x, y| {
+            let (Some(wrapper), Some(marker)) = (wrapper.upgrade(), marker.upgrade()) else {
+                return gdk::DragAction::empty();
+            };
+            let side = insertion_side(&wrapper, orientation, x, y);
+            marker.remove_css_class("before");
+            marker.remove_css_class("after");
+            let align = match side {
+                InsertionSide::Before => {
+                    marker.add_css_class("before");
+                    gtk::Align::Start
+                }
+                InsertionSide::After => {
+                    marker.add_css_class("after");
+                    gtk::Align::End
+                }
+            };
+            if orientation == gtk::Orientation::Horizontal {
+                marker.set_halign(align);
+            } else {
+                marker.set_valign(align);
+            }
+            marker.set_visible(true);
+            gdk::DragAction::MOVE
+        }
+    };
+    drop_target.connect_enter(update_marker.clone());
+    drop_target.connect_motion(update_marker);
 
     {
-        let highlight = highlight.downgrade();
+        let marker = marker.downgrade();
         drop_target.connect_leave(move |_| {
-            if let Some(highlight) = highlight.upgrade() {
-                highlight.remove_css_class("is-drop-target");
+            if let Some(marker) = marker.upgrade() {
+                marker.set_visible(false);
             }
         });
     }
@@ -68,34 +104,24 @@ pub(crate) fn install_pin_drag_and_drop(
         let ctx = ctx.clone();
         let target_pin = pin_id.to_string();
         let wrapper = wrapper.downgrade();
-        let highlight = highlight.downgrade();
-        let orientation = ctx.items_box.orientation();
+        let marker = marker.downgrade();
 
         drop_target.connect_drop(move |_, value, x, y| {
             let Some(wrapper) = wrapper.upgrade() else {
                 return false;
             };
-            if let Some(highlight) = highlight.upgrade() {
-                highlight.remove_css_class("is-drop-target");
+            if let Some(marker) = marker.upgrade() {
+                marker.set_visible(false);
             }
 
             let Ok(dragged_pin) = value.get::<String>() else {
                 return false;
             };
 
-            let insert_after = match orientation {
-                gtk::Orientation::Horizontal => x > f64::from(wrapper.allocated_width()) / 2.0,
-                gtk::Orientation::Vertical => y > f64::from(wrapper.allocated_height()) / 2.0,
-                _ => false,
-            };
+            let side = insertion_side(&wrapper, orientation, x, y);
             let changed = {
                 let mut dock_state = ctx.state.borrow_mut();
-                reorder_pins(
-                    &mut dock_state.pins,
-                    &dragged_pin,
-                    &target_pin,
-                    insert_after,
-                )
+                reorder_pins(&mut dock_state.pins, &dragged_pin, &target_pin, side)
             };
 
             if changed {
@@ -112,11 +138,35 @@ pub(crate) fn install_pin_drag_and_drop(
     wrapper.add_controller(drop_target);
 }
 
+#[derive(Clone, Copy)]
+enum InsertionSide {
+    Before,
+    After,
+}
+
+fn insertion_side(
+    wrapper: &gtk::Box,
+    orientation: gtk::Orientation,
+    x: f64,
+    y: f64,
+) -> InsertionSide {
+    let (position, extent) = match orientation {
+        gtk::Orientation::Horizontal => (x, wrapper.allocated_width()),
+        gtk::Orientation::Vertical => (y, wrapper.allocated_height()),
+        _ => return InsertionSide::Before,
+    };
+    if position > f64::from(extent) / 2.0 {
+        InsertionSide::After
+    } else {
+        InsertionSide::Before
+    }
+}
+
 fn reorder_pins(
     pins: &mut Vec<String>,
     dragged_pin: &str,
     target_pin: &str,
-    insert_after: bool,
+    side: InsertionSide,
 ) -> bool {
     if dragged_pin == target_pin {
         return false;
@@ -133,7 +183,7 @@ fn reorder_pins(
     if source_idx < target_idx {
         target_idx -= 1;
     }
-    if insert_after {
+    if matches!(side, InsertionSide::After) {
         target_idx += 1;
     }
 
@@ -143,7 +193,7 @@ fn reorder_pins(
 
 #[cfg(test)]
 mod tests {
-    use super::reorder_pins;
+    use super::{InsertionSide, reorder_pins};
 
     fn pins() -> Vec<String> {
         ["a", "b", "c"].map(str::to_string).to_vec()
@@ -152,22 +202,27 @@ mod tests {
     #[test]
     fn moves_pin_before_target() {
         let mut pins = pins();
-        assert!(reorder_pins(&mut pins, "c", "a", false));
+        assert!(reorder_pins(&mut pins, "c", "a", InsertionSide::Before));
         assert_eq!(pins, ["c", "a", "b"]);
     }
 
     #[test]
     fn moves_pin_after_target() {
         let mut pins = pins();
-        assert!(reorder_pins(&mut pins, "a", "b", true));
+        assert!(reorder_pins(&mut pins, "a", "b", InsertionSide::After));
         assert_eq!(pins, ["b", "a", "c"]);
     }
 
     #[test]
     fn ignores_self_and_unknown_pins() {
         let mut pins = pins();
-        assert!(!reorder_pins(&mut pins, "a", "a", false));
-        assert!(!reorder_pins(&mut pins, "missing", "a", false));
+        assert!(!reorder_pins(&mut pins, "a", "a", InsertionSide::Before));
+        assert!(!reorder_pins(
+            &mut pins,
+            "missing",
+            "a",
+            InsertionSide::Before
+        ));
         assert_eq!(pins, ["a", "b", "c"]);
     }
 }

@@ -137,13 +137,17 @@ pub(crate) fn build_item_widget(ctx: &RenderContext, item: &DockItem) -> gtk::Bo
         button_overlay.add_overlay(&badge);
     }
 
-    wrapper.append(&button_overlay);
-    wrapper.append(&indicator);
+    let contents = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    contents.append(&button_overlay);
+    contents.append(&indicator);
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&contents));
+    wrapper.append(&overlay);
 
     if item.pinned
         && let Some(app) = item.app.as_ref()
     {
-        super::dnd::install_pin_drag_and_drop(&wrapper, &button, ctx, &app.id);
+        super::dnd::install_pin_drag_and_drop(&wrapper, &overlay, ctx, &app.id);
     }
 
     wrapper

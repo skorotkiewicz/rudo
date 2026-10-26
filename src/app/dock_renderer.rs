@@ -197,6 +197,68 @@ mod tests {
             .clone()
     }
 
+    fn assert_drop_marker(ctx: &RenderContext) {
+        let wrapper = entry(ctx, "Notes");
+        let overlay = wrapper
+            .first_child()
+            .and_downcast::<gtk::Overlay>()
+            .expect("dock item must contain its overlay");
+        let marker = overlay
+            .child()
+            .and_then(|child| child.next_sibling())
+            .expect("pinned item must have an insertion marker");
+        let target = wrapper
+            .observe_controllers()
+            .iter::<glib::Object>()
+            .filter_map(Result::ok)
+            .find_map(|controller| controller.downcast::<gtk::DropTarget>().ok())
+            .expect("pinned item must accept drops");
+        let width = wrapper.allocated_width();
+        let height = wrapper.allocated_height();
+        assert!(!marker.is_visible(), "insertion marker starts hidden");
+        target.emit_by_name::<gtk::gdk::DragAction>("enter", &[&0.0_f64, &0.0_f64]);
+        settle();
+        assert!(marker.is_visible(), "entering a target must show the line");
+        assert!(marker.has_css_class("before"), "first half inserts before");
+        let horizontal = ctx.items_box.orientation() == gtk::Orientation::Horizontal;
+        assert_eq!(
+            if horizontal {
+                marker.halign()
+            } else {
+                marker.valign()
+            },
+            gtk::Align::Start,
+            "the line must mark the leading edge"
+        );
+        target.emit_by_name::<gtk::gdk::DragAction>(
+            "motion",
+            &[&f64::from(width), &f64::from(height)],
+        );
+        settle();
+        assert!(marker.has_css_class("after"), "second half inserts after");
+        assert!(!marker.has_css_class("before"), "only one edge is marked");
+        assert_eq!(
+            if horizontal {
+                marker.halign()
+            } else {
+                marker.valign()
+            },
+            gtk::Align::End,
+            "moving across an icon must move the insertion line"
+        );
+        assert_eq!(
+            (wrapper.allocated_width(), wrapper.allocated_height()),
+            (width, height),
+            "showing the line must not resize icons or move drop targets"
+        );
+        assert_eq!(marker.allocated_width().min(marker.allocated_height()), 2);
+        target.emit_by_name::<()>("leave", &[]);
+        assert!(
+            !marker.is_visible(),
+            "leaving the target must hide the line"
+        );
+    }
+
     fn find_popover(widget: &gtk::Widget) -> Option<gtk::Popover> {
         if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
             return Some(popover.clone());
@@ -215,6 +277,23 @@ mod tests {
     #[ignore = "requires a GTK display; run explicitly during graphical smoke tests"]
     fn gtk_reuses_widgets_and_preserves_open_menus() {
         gtk::init().expect("graphical regression test requires a GTK display");
+        let provider = gtk::CssProvider::new();
+        let css_errors = Rc::new(RefCell::new(Vec::new()));
+        let errors = Rc::clone(&css_errors);
+        provider.connect_parsing_error(move |_, _, error| {
+            errors.borrow_mut().push(error.to_string());
+        });
+        provider.load_from_data(include_str!("style.css"));
+        assert!(
+            css_errors.borrow().is_empty(),
+            "dock CSS must parse: {css_errors:?}"
+        );
+        let display = gtk::gdk::Display::default().expect("GTK test requires a display");
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
         let entries = DesktopEntries::new(&[
             ("notes.desktop", "Name=Notes\nExec=/bin/true"),
             ("tools.desktop", "Name=Tools\nExec=/bin/true"),
@@ -260,6 +339,7 @@ mod tests {
         render_dock(&ctx);
         window.present();
         settle();
+        assert_drop_marker(&ctx);
         let notes = entry(&ctx, "Notes");
         let alpha = entry(&ctx, "alpha");
         let beta = entry(&ctx, "beta");
@@ -405,8 +485,16 @@ mod tests {
         );
 
         ctx.renderer.borrow_mut().clear();
+        super::super::clear_children(&items_box);
+        items_box.set_orientation(gtk::Orientation::Vertical);
+        render_dock(&ctx);
+        settle();
+        assert_drop_marker(&ctx);
+
+        ctx.renderer.borrow_mut().clear();
         contexts.borrow_mut().clear();
         super::super::clear_children(&items_box);
         window.close();
+        gtk::style_context_remove_provider_for_display(&display, &provider);
     }
 }
