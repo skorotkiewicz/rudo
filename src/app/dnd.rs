@@ -1,10 +1,13 @@
+use std::rc::Rc;
+
 use gtk::gdk;
+use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
 use crate::config;
 
-use super::{RenderContext, render_all};
+use super::{RenderContext, autohide, render_all};
 
 pub(crate) fn install_pin_drag_and_drop(
     wrapper: &gtk::Box,
@@ -18,6 +21,26 @@ pub(crate) fn install_pin_drag_and_drop(
     drag_source.connect_prepare(move |_, _, _| {
         Some(gdk::ContentProvider::for_value(&source_pin.to_value()))
     });
+    {
+        let autohide = Rc::downgrade(&ctx.autohide);
+        drag_source.connect_drag_begin(move |_, _| {
+            if let Some(autohide) = autohide.upgrade() {
+                autohide::begin_drag(&autohide);
+            }
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        // drag-end also runs for cancelled drags. Wait until GTK finishes its
+        // signal handlers before applying updates that may replace the source.
+        drag_source.connect_drag_end(move |_, _, _| {
+            let ctx = ctx.clone();
+            glib::idle_add_local_once(move || {
+                autohide::end_drag(&ctx.autohide);
+                render_all(&ctx);
+            });
+        });
+    }
     wrapper.add_controller(drag_source);
 
     let drop_target = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);

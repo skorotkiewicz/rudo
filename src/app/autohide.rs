@@ -14,6 +14,7 @@ pub(crate) struct AutoHideState {
     pub(crate) hide_source: Option<glib::SourceId>,
     pub(crate) enabled: bool,
     pub(crate) delay: Duration,
+    dragging: bool,
 }
 
 impl AutoHideState {
@@ -23,8 +24,26 @@ impl AutoHideState {
             hide_source: None,
             enabled,
             delay,
+            dragging: false,
         }
     }
+
+    /// Whether a pin drag is keeping this dock view stable and visible.
+    pub(crate) fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+}
+
+/// Keeps the dock revealed until the pin drag finishes.
+pub(crate) fn begin_drag(autohide: &Rc<RefCell<AutoHideState>>) {
+    autohide.borrow_mut().dragging = true;
+    show_dock(autohide);
+}
+
+/// Restores the normal hide delay after a drop or cancellation.
+pub(crate) fn end_drag(autohide: &Rc<RefCell<AutoHideState>>) {
+    autohide.borrow_mut().dragging = false;
+    schedule_hide(autohide);
 }
 
 pub(crate) fn show_dock(autohide: &Rc<RefCell<AutoHideState>>) {
@@ -64,7 +83,7 @@ pub(crate) fn cancel_pending_hide(autohide: &Rc<RefCell<AutoHideState>>) {
 pub(crate) fn schedule_hide(autohide: &Rc<RefCell<AutoHideState>>) {
     let delay = {
         let state = autohide.borrow();
-        if !state.enabled {
+        if !state.enabled || state.dragging {
             state.revealer.set_reveal_child(true);
             return;
         }

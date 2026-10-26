@@ -20,12 +20,16 @@ pub(super) struct DockRenderer {
 
 impl DockRenderer {
     /// Reuses unchanged entries and leaves open context menus intact.
+    /// Updates are deferred during pin drags to preserve sources and drop targets.
     pub(super) fn render(
         &mut self,
         ctx: &RenderContext,
         pinned: &[DockItem],
         running: &[DockItem],
     ) {
+        if ctx.autohide.borrow().is_dragging() {
+            return;
+        }
         let mut old = std::mem::take(&mut self.items);
         let mut previous = None::<gtk::Widget>;
         let show_separator = !pinned.is_empty() && !running.is_empty();
@@ -332,6 +336,72 @@ mod tests {
             entry(&ctx, "Notes"),
             notes,
             "pinned entries survive the last window closing"
+        );
+
+        {
+            let mut state = ctx.autohide.borrow_mut();
+            state.enabled = true;
+            state.delay = Duration::from_millis(20);
+        }
+        autohide::schedule_hide(&ctx.autohide);
+        autohide::begin_drag(&ctx.autohide);
+        assert!(
+            ctx.autohide.borrow().hide_source.is_none(),
+            "starting a drag must cancel any pending hide"
+        );
+        autohide::schedule_hide(&ctx.autohide);
+        settle();
+        assert!(
+            revealer.reveals_child(),
+            "leaving the dock during a slow drag must not hide it"
+        );
+        assert!(
+            ctx.autohide.borrow().hide_source.is_none(),
+            "pointer leave events must not arm a hide timer during a drag"
+        );
+        ctx.state.borrow_mut().pins.reverse();
+        ctx.state.borrow_mut().windows.push(WindowState {
+            id: "notes-window".to_string(),
+            app_id: Some("notes".to_string()),
+            title: Some("Changed during drag".to_string()),
+            active: true,
+            badge_count: None,
+        });
+        render_dock(&ctx);
+        assert_eq!(
+            entry(&ctx, "Notes"),
+            notes,
+            "window updates must not replace an active drag source"
+        );
+        assert_eq!(
+            items_box.first_child(),
+            Some(entry(&ctx, "Tools").upcast()),
+            "drop targets must remain in place until the drag ends"
+        );
+        autohide::end_drag(&ctx.autohide);
+        render_dock(&ctx);
+        assert_ne!(
+            entry(&ctx, "Notes"),
+            notes,
+            "deferred window updates must apply when the drag ends"
+        );
+        assert_eq!(
+            items_box.first_child(),
+            Some(entry(&ctx, "Notes").upcast()),
+            "deferred pin reordering must apply when the drag ends"
+        );
+        settle();
+        assert!(
+            !revealer.reveals_child(),
+            "autohide must resume with a fresh delay after the drag ends"
+        );
+        ctx.autohide.borrow_mut().enabled = false;
+        autohide::begin_drag(&ctx.autohide);
+        autohide::end_drag(&ctx.autohide);
+        settle();
+        assert!(
+            revealer.reveals_child(),
+            "finishing a drag must respect disabled autohide"
         );
 
         ctx.renderer.borrow_mut().clear();
