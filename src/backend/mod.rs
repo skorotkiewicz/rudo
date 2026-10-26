@@ -17,17 +17,25 @@ pub struct EventMailbox {
 }
 
 impl EventMailbox {
+    /// Replaces any pending snapshot with the newest window list.
+    ///
+    /// # Panics
+    /// Panics if another thread panicked while holding the mailbox lock.
     pub fn publish(&self, snapshot: Vec<WindowState>) {
         *self
             .latest
             .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(snapshot);
+            .expect("window snapshot mailbox must not be poisoned") = Some(snapshot);
     }
 
+    /// Takes the pending snapshot, if any.
+    ///
+    /// # Panics
+    /// Panics if another thread panicked while holding the mailbox lock.
     pub fn take_latest(&self) -> Option<Vec<WindowState>> {
         self.latest
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
+            .expect("window snapshot mailbox must not be poisoned")
             .take()
     }
 }

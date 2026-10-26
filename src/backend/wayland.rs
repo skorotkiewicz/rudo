@@ -401,6 +401,7 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
                 {
                     control.handles.remove(&window.dock_id);
                 }
+                handle.destroy();
                 state.publish_snapshot();
             }
             // Note: Badge events are a compositor-specific extension
@@ -413,8 +414,24 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for WaylandState {
 }
 
 fn decode_states(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
-    bytes.chunks_exact(4).map(|chunk| {
-        let bytes: [u8; 4] = chunk.try_into().expect("state value must be four bytes");
-        u32::from_ne_bytes(bytes)
-    })
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(u32::from_ne_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_states;
+
+    #[test]
+    fn decodes_native_endian_states_and_ignores_incomplete_tail() {
+        let mut bytes = Vec::from(2_u32.to_ne_bytes());
+        bytes.extend_from_slice(&3_u32.to_ne_bytes());
+        bytes.extend_from_slice(&[0, 1]);
+        assert_eq!(decode_states(&bytes).collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(decode_states(&[]).count(), 0);
+    }
 }

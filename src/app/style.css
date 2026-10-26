@@ -30,9 +30,53 @@
     border-color: rgba(255, 255, 255, 0.12);
 }
 
-.dock-item.is-drop-target {
-    border-color: rgba(255, 214, 120, 0.48);
-    background: rgba(255, 214, 120, 0.12);
+.dock-drag-preview {
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(38, 46, 60, 0.94);
+}
+
+.dock-pin.is-dragging {
+    opacity: 0.35;
+}
+
+.dock-pin:drop(active) {
+    outline: none;
+    box-shadow: none;
+}
+
+.dock-pin.is-dragging .dock-item,
+.dock-pin:drop(active) .dock-item {
+    border-color: transparent;
+}
+
+.dock-drop-marker {
+    min-width: 2px;
+    border-radius: 1px;
+    background: #23c9f2;
+    box-shadow: 0 0 6px rgba(35, 201, 242, 0.8);
+}
+
+/* Center the overlay line in the 10px gap without changing item allocation. */
+.dock-drop-marker.before {
+    transform: translateX(-6px);
+}
+
+.dock-drop-marker.after {
+    transform: translateX(6px);
+}
+
+.dock-drop-marker.is-horizontal {
+    min-width: 0;
+    min-height: 2px;
+}
+
+.dock-drop-marker.is-horizontal.before {
+    transform: translateY(-6px);
+}
+
+.dock-drop-marker.is-horizontal.after {
+    transform: translateY(6px);
 }
 
 .dock-item.is-running {

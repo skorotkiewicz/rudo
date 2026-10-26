@@ -71,7 +71,14 @@ fn event_loop(
     }
 }
 
-fn event_session(mut stream: UnixStream, events: &EventMailbox) -> Result<(), NiriError> {
+fn event_session(stream: UnixStream, events: &EventMailbox) -> Result<(), NiriError> {
+    let result = read_event_stream(stream, events);
+    // A disconnected compositor can no longer vouch for the previous windows.
+    events.publish(Vec::new());
+    result
+}
+
+fn read_event_stream(mut stream: UnixStream, events: &EventMailbox) -> Result<(), NiriError> {
     write_json_line(&mut stream, &Request::EventStream)?;
 
     let reader_stream = stream.try_clone()?;
@@ -259,4 +266,42 @@ enum Request {
 enum Action {
     FocusWindow { id: u64 },
     CloseWindow { id: Option<u64> },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NiriError, event_session};
+    use crate::backend::EventMailbox;
+    use std::io::Write;
+    use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    #[test]
+    fn disconnect_clears_previously_published_windows() {
+        let events = EventMailbox::default();
+        let (client, mut server) = UnixStream::pair().expect("Unix socket pair must be available");
+        server
+            .write_all(b"{\"Ok\":\"Handled\"}\n{\"WindowsChanged\":{\"windows\":[{\"id\":7,\"title\":\"Notes\",\"app_id\":\"obsidian\",\"is_focused\":true}]}}\n")
+            .expect("test stream must be writable");
+        server
+            .shutdown(Shutdown::Write)
+            .expect("server write side must close");
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("socket timeout must be configurable");
+
+        assert!(
+            matches!(
+                event_session(client, &events),
+                Err(NiriError::ConnectionClosed)
+            ),
+            "EOF must terminate the session"
+        );
+        assert_eq!(
+            events.take_latest(),
+            Some(Vec::new()),
+            "disconnected windows must not remain actionable"
+        );
+    }
 }
