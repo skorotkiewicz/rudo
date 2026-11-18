@@ -363,6 +363,10 @@ impl Dispatch<WlOutput, u32> for WaylandState {
 }
 
 impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for WaylandState {
+    wayland_client::event_created_child!(WaylandState, ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ())
+    ]);
+
     fn event(
         state: &mut Self,
         _: &ZwlrForeignToplevelManagerV1,
@@ -486,6 +490,31 @@ fn decode_states(bytes: &[u8]) -> impl Iterator<Item = u32> + '_ {
 mod tests {
     use super::{decode_states, resolve_output_names};
     use std::collections::HashMap;
+
+    #[test]
+    fn toplevel_announcement_registers_the_window_with_the_queue() {
+        use super::{
+            WaylandState, ZwlrForeignToplevelHandleV1, ZwlrForeignToplevelManagerV1,
+            zwlr_foreign_toplevel_manager_v1,
+        };
+        use std::os::unix::net::UnixStream;
+        use wayland_client::{Connection, Dispatch};
+
+        let (client, _server) = UnixStream::pair().expect("test needs a local socket pair");
+        let connection = Connection::from_socket(client).expect("test socket must be usable");
+        let queue = connection.new_event_queue::<WaylandState>();
+        let data =
+            <WaylandState as Dispatch<ZwlrForeignToplevelManagerV1, ()>>::event_created_child(
+                zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE,
+                &queue.handle(),
+            );
+        type HandleData =
+            wayland_client::QueueProxyData<ZwlrForeignToplevelHandleV1, (), WaylandState>;
+        assert!(
+            data.is::<HandleData>(),
+            "new windows must dispatch events to the toplevel handle handler"
+        );
+    }
 
     #[test]
     fn resolves_output_membership_without_hiding_unknown_windows() {

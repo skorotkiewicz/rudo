@@ -11,7 +11,8 @@ use gtk::glib::{self, ControlFlow};
 use gtk::prelude::*;
 use gtk4 as gtk;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::backend::{self, BackendController, EventMailbox};
 use crate::catalog::{AppCatalog, AppRecord};
@@ -1116,7 +1117,9 @@ impl ConfigChanges {
 
     fn mark_event(&self, event: &Event) {
         // Reading a watched file must not schedule another reload of that file.
-        if event.kind.is_access() {
+        if event.kind.is_access()
+            && event.kind != EventKind::Access(AccessKind::Close(AccessMode::Write))
+        {
             return;
         }
 
@@ -1254,6 +1257,16 @@ mod tests {
             0,
             "access events must not create a reload feedback loop"
         );
+    }
+
+    #[test]
+    fn closing_a_written_file_reloads_its_final_contents() {
+        let changes = ConfigChanges::default();
+        changes.mark_event(
+            &Event::new(EventKind::Access(AccessKind::Close(AccessMode::Write)))
+                .add_path("settings.json".into()),
+        );
+        assert_eq!(changes.take(), ConfigChanges::SETTINGS);
     }
 
     #[test]

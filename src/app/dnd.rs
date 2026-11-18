@@ -197,7 +197,6 @@ fn reorder_pins(
         return false;
     };
 
-    let dragged = pins.remove(source_idx);
     if source_idx < target_idx {
         target_idx -= 1;
     }
@@ -205,7 +204,12 @@ fn reorder_pins(
         target_idx += 1;
     }
 
-    pins.insert(target_idx.min(pins.len()), dragged);
+    if target_idx == source_idx {
+        return false;
+    }
+
+    let dragged = pins.remove(source_idx);
+    pins.insert(target_idx, dragged);
     true
 }
 
@@ -229,6 +233,21 @@ mod tests {
         let mut pins = pins();
         assert!(reorder_pins(&mut pins, "a", "b", InsertionSide::After));
         assert_eq!(pins, ["b", "a", "c"]);
+    }
+
+    #[test]
+    fn adjacent_drops_that_preserve_order_are_unchanged() {
+        let mut pins = pins();
+        for (source, target, side) in [
+            ("a", "b", InsertionSide::Before),
+            ("b", "a", InsertionSide::After),
+        ] {
+            assert!(
+                !reorder_pins(&mut pins, source, target, side),
+                "pin is already on this side"
+            );
+            assert_eq!(pins, ["a", "b", "c"]);
+        }
     }
 
     #[test]

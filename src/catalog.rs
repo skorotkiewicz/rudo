@@ -196,22 +196,13 @@ impl AppCatalog {
             return Some(raw.to_string());
         }
 
-        // Fast path: check aliases without allocation first
-        if let Some(id) = self.aliases.get(raw) {
-            return Some(id.clone());
+        if !raw.ends_with(".desktop") {
+            let desktop_id = format!("{raw}.desktop");
+            if self.apps.contains_key(&desktop_id) {
+                return Some(desktop_id);
+            }
         }
 
-        let desktop_id = if raw.ends_with(".desktop") {
-            raw.to_string()
-        } else {
-            format!("{raw}.desktop")
-        };
-
-        if self.apps.contains_key(&desktop_id) {
-            return Some(desktop_id);
-        }
-
-        // Check aliases with normalized key
         self.aliases.get(&normalize_key(raw)).cloned()
     }
 }
@@ -292,6 +283,18 @@ mod tests {
         ]);
         assert_eq!(
             entries.catalog().resolve_id("true").as_deref(),
+            Some("notes.desktop")
+        );
+    }
+
+    #[test]
+    fn exact_desktop_basename_wins_when_normalized_ids_collide() {
+        let entries = DesktopEntries::new(&[
+            ("Notes.desktop", "Name=A launcher\nExec=/bin/true"),
+            ("notes.desktop", "Name=B launcher\nExec=/bin/false"),
+        ]);
+        assert_eq!(
+            entries.catalog().resolve_id("notes").as_deref(),
             Some("notes.desktop")
         );
     }
